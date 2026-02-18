@@ -32,12 +32,9 @@ Anyways, this one doesn't suck, tell it what you wanna hear and it will play it.
 ### Linux (all distros — Wayland and X11, it works well in hyprland, cuz I use hyprland)
 
 ```bash
-git clone https://github.com/schultz-dev0/SpotifyDJ
-
-```
-
-```bash
-install.sh
+git clone https://github.com/schultz-dev0/SpotifyDJ ~/SpotifyDJ
+cd ~/SpotifyDJ
+./install.sh
 ```
 
 The script detects your distro, package manager, and display server
@@ -58,7 +55,8 @@ from the project folder.
 ### macOS (Big Sur 11+)
 
 ```bash
-bash install_mac.sh
+git clone https://github.com/schultz-dev0/SpotifyDJ /Users/YourUserName/Downloads/SpotifyDJ
+bash /Users/YourUserName/Downloads/SpotifyDJ/install_mac.sh
 ```
 
 The script installs Homebrew if needed, then Python, tkinter, and all

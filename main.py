@@ -13,6 +13,7 @@ Examples:
   python main.py                        # open GUI
   python main.py "dark techno"          # play immediately
   python main.py --set-key AIza...      # save API key
+  python main.py --continue              # more tracks, same vibe
   dj "late night lo-fi"                 # same as above via symlink
 """
 
@@ -41,6 +42,11 @@ def main() -> None:
             sys.exit(1)
         from cli import run_set_key
         sys.exit(run_set_key(args[1]))
+
+    # --continue  (extend current session with fresh tracks, same vibe)
+    if args[0] == "--continue":
+        from cli import run_cli
+        sys.exit(run_cli("", is_continue=True))
 
     # Any other argument is treated as a music request for CLI mode
     request = " ".join(args)

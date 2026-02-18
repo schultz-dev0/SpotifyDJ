@@ -19,8 +19,6 @@ Requires (installed by install.sh automatically):
   sudo pacman -S python-gobject gtk4
 """
 
-# If you are snooping through the source files, I decided to make a ctk and gtk version because a GUI that looks good is a good gui, don't tell anyone but AI wrote the app_ctk file lol. Idk how to do that stuff hashtag vibecode lmao
-
 import re
 import threading
 from datetime import datetime
@@ -180,6 +178,11 @@ def _build_css(c: dict) -> bytes:
         font-size: 13px;
     }}
     button.secondary:hover {{ background-color: {c['surface']}; }}
+    .player-bar {{
+        background-color: {c['surface']};
+        border-radius: 8px;
+        padding: 8px 12px;
+    }}
     .log-view {{
         background-color: {c['bg_alt']};
         color: {c['subtext']};
@@ -386,11 +389,54 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         self._request_entry.connect("activate", lambda _: self._handle_play())
         outer.append(self._request_entry)
 
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_row.set_margin_bottom(20)
+
         self._play_button = Gtk.Button(label="Play")
         self._play_button.add_css_class("primary")
+        self._play_button.set_hexpand(True)
         self._play_button.connect("clicked", lambda _: self._handle_play())
-        self._play_button.set_margin_bottom(20)
-        outer.append(self._play_button)
+        btn_row.append(self._play_button)
+
+        self._continue_button = Gtk.Button(label="Continue")
+        self._continue_button.add_css_class("secondary")
+        self._continue_button.connect("clicked", lambda _: self._handle_continue())
+        btn_row.append(self._continue_button)
+
+        outer.append(btn_row)
+
+        # Player bar
+        player_frame = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        player_frame.add_css_class("player-bar")
+        player_frame.set_margin_bottom(16)
+
+        self._track_label = Gtk.Label(label="Not playing")
+        self._track_label.add_css_class("label-muted")
+        self._track_label.set_halign(Gtk.Align.START)
+        self._track_label.set_hexpand(True)
+        self._track_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._track_label.set_max_width_chars(40)
+        player_frame.append(self._track_label)
+
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+        self._prev_button = Gtk.Button(label="⏮")
+        self._prev_button.add_css_class("secondary")
+        self._prev_button.connect("clicked", lambda _: self._handle_previous())
+        controls.append(self._prev_button)
+
+        self._next_button = Gtk.Button(label="⏭")
+        self._next_button.add_css_class("secondary")
+        self._next_button.connect("clicked", lambda _: self._handle_skip())
+        controls.append(self._next_button)
+
+        self._like_button = Gtk.Button(label="♡")
+        self._like_button.add_css_class("secondary")
+        self._like_button.connect("clicked", lambda _: self._handle_like())
+        controls.append(self._like_button)
+
+        player_frame.append(controls)
+        outer.append(player_frame)
 
         # Activity log
         activity_label = Gtk.Label(label="Activity")
@@ -421,10 +467,82 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
 
         self._stack.add_named(outer, "player")
         self._log("Ready. Enter a request and press Play.")
+        # Pre-authenticate on the main thread so worker threads never need
+        # to trigger the OAuth browser flow (which deadlocks in GTK).
+        # Do it in an idle callback so the window is visible first.
+        def _preauth():
+            try:
+                self._spotify._get_client()
+            except Exception as e:
+                print(f"[auth] pre-auth failed: {e}")
+            self._start_player_poll()
+            return GLib.SOURCE_REMOVE
+        GLib.timeout_add(800, _preauth)
 
     # ------------------------------------------------------------------
     # Playback logic
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Player bar controls
+    # ------------------------------------------------------------------
+
+    def _handle_like(self) -> None:
+        def _work():
+            ok, msg = self._spotify.like_current_track()
+            self._log(msg)
+            GLib.idle_add(self._refresh_player_bar)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _handle_skip(self) -> None:
+        def _work():
+            ok, msg = self._spotify.skip_track()
+            if ok:
+                import time; time.sleep(0.6)
+                GLib.idle_add(self._refresh_player_bar)
+            else:
+                self._log(msg)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _handle_previous(self) -> None:
+        def _work():
+            ok, msg = self._spotify.previous_track()
+            if ok:
+                import time; time.sleep(0.6)
+                GLib.idle_add(self._refresh_player_bar)
+            else:
+                self._log(msg)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _refresh_player_bar(self) -> bool:
+        """Poll Spotify for current track and update the bar. GLib-safe."""
+        def _work():
+            track = self._spotify.get_current_track()
+            GLib.idle_add(self._update_player_bar, track)
+        threading.Thread(target=_work, daemon=True).start()
+        return GLib.SOURCE_REMOVE
+
+    def _update_player_bar(self, track) -> bool:
+        if not hasattr(self, "_track_label"):
+            return GLib.SOURCE_REMOVE
+        if track:
+            self._track_label.set_text(f"{track['name']}  —  {track['artist']}")
+            self._track_label.remove_css_class("label-muted")
+            self._like_button.set_label("♥" if track["is_liked"] else "♡")
+        else:
+            self._track_label.set_text("Not playing")
+            self._track_label.add_css_class("label-muted")
+            self._like_button.set_label("♡")
+        return GLib.SOURCE_REMOVE
+
+    def _start_player_poll(self) -> None:
+        """Poll current track every 5 seconds."""
+        self._refresh_player_bar()
+        GLib.timeout_add(5000, self._poll_tick)
+
+    def _poll_tick(self) -> bool:
+        self._refresh_player_bar()
+        return GLib.SOURCE_CONTINUE  # repeat
 
     def _handle_play(self) -> None:
         if self._is_playing:
@@ -433,24 +551,46 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         if not request:
             self._log("Enter a request first.")
             return
+        self._spotify.last_request = request
         self._set_busy(True)
-        threading.Thread(target=self._play_worker, args=(request,), daemon=True).start()
+        threading.Thread(target=self._play_worker, args=(request, False), daemon=True).start()
 
-    def _play_worker(self, request: str) -> None:
+    def _handle_continue(self) -> None:
+        if self._is_playing:
+            return
+        if not self._spotify.last_request:
+            self._log("Nothing playing yet — use Play first.")
+            return
+        self._set_busy(True)
+        threading.Thread(target=self._play_worker, args=(self._spotify.last_request, True), daemon=True).start()
+
+    def _play_worker(self, request: str, is_continue: bool = False) -> None:
         """Background thread: AI query then Spotify playback."""
-        self._log(f'Request: "{request}"')
+        if is_continue:
+            self._log(f'Continuing: "{request}"')
+        else:
+            self._log(f'Request: "{request}"')
 
         try:
-            config     = load_config()
-            directives = get_vibe_params(request, config.get("gemini_api_key", ""))
-            self._log(f"AI reasoning: {directives.reasoning}")
-            self._log(f"Searching Spotify for: {directives.search_query}")
+            config  = load_config()
+            api_key = config.get("gemini_api_key", "")
+            if is_continue:
+                from brain import get_continue_params
+                directives = get_continue_params(
+                    request,
+                    self._spotify.last_queries,
+                    api_key,
+                )
+            else:
+                directives = get_vibe_params(request, api_key)
+            self._log(f"AI: {directives.reasoning}")
+            self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
         except Exception as e:
             GLib.idle_add(self._finish_worker, f"AI error: {e}", False)
             return
 
         try:
-            result = self._spotify.search_and_play(directives.search_query)
+            result = self._spotify.search_and_play(directives)
         except Exception as e:
             GLib.idle_add(self._finish_worker, f"Spotify error: {e}", False)
             return
@@ -464,12 +604,15 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
     def _finish_worker(self, message: str, success: bool) -> bool:
         self._log(message)
         self._set_busy(False)
+        if success:
+            GLib.timeout_add(1200, self._refresh_player_bar)
         return GLib.SOURCE_REMOVE
 
     def _set_busy(self, busy: bool) -> None:
         self._is_playing = busy
         self._play_button.set_sensitive(not busy)
         self._play_button.set_label("Working..." if busy else "Play")
+        self._continue_button.set_sensitive(not busy)
         self._request_entry.set_sensitive(not busy)
 
     # ------------------------------------------------------------------

@@ -12,6 +12,7 @@ Customisation reference:
 """
 
 import threading
+from threading import Timer
 from datetime import datetime
 
 import customtkinter as ctk
@@ -204,18 +205,76 @@ class SpotifyAIDJApp(ctk.CTk):
         self._request_entry.pack(fill="x")
         self._request_entry.bind("<Return>", lambda _: self._handle_play())
 
+        btn_row = ctk.CTkFrame(input_frame, fg_color="transparent")
+        btn_row.pack(fill="x", pady=(10, 0))
+
         self._play_button = ctk.CTkButton(
-            input_frame,
+            btn_row,
             text="Play",
             height=44,
             font=("Helvetica", 14, "bold"),
             command=self._handle_play,
         )
-        self._play_button.pack(fill="x", pady=(10, 0))
+        self._play_button.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self._continue_button = ctk.CTkButton(
+            btn_row,
+            text="Continue",
+            height=44,
+            width=120,
+            font=("Helvetica", 14, "bold"),
+            fg_color="transparent",
+            border_width=1,
+            command=self._handle_continue,
+        )
+        self._continue_button.pack(side="left")
+
+        # Player bar
+        player_frame = ctk.CTkFrame(self, corner_radius=10)
+        player_frame.pack(fill="x", padx=20, pady=(16, 0))
+
+        # Track info
+        self._track_label = ctk.CTkLabel(
+            player_frame,
+            text="Not playing",
+            font=("Helvetica", 12),
+            text_color="gray",
+            anchor="w",
+            wraplength=WINDOW_WIDTH - 180,
+        )
+        self._track_label.pack(side="left", padx=(12, 0), pady=10, fill="x", expand=True)
+
+        # Controls (right side)
+        controls = ctk.CTkFrame(player_frame, fg_color="transparent")
+        controls.pack(side="right", padx=8, pady=6)
+
+        self._prev_button = ctk.CTkButton(
+            controls, text="⏮", width=36, height=32,
+            font=("Helvetica", 14),
+            fg_color="transparent", border_width=1,
+            command=self._handle_previous,
+        )
+        self._prev_button.pack(side="left", padx=2)
+
+        self._next_button = ctk.CTkButton(
+            controls, text="⏭", width=36, height=32,
+            font=("Helvetica", 14),
+            fg_color="transparent", border_width=1,
+            command=self._handle_skip,
+        )
+        self._next_button.pack(side="left", padx=2)
+
+        self._like_button = ctk.CTkButton(
+            controls, text="♡", width=36, height=32,
+            font=("Helvetica", 14),
+            fg_color="transparent", border_width=1,
+            command=self._handle_like,
+        )
+        self._like_button.pack(side="left", padx=2)
 
         # Activity log
         log_frame = ctk.CTkFrame(self, fg_color="transparent")
-        log_frame.pack(fill="both", expand=True, padx=20, pady=(20, 20))
+        log_frame.pack(fill="both", expand=True, padx=20, pady=(16, 20))
 
         ctk.CTkLabel(log_frame, text="Activity", font=("Helvetica", 13, "bold")).pack(
             anchor="w", pady=(0, 6)
@@ -228,49 +287,141 @@ class SpotifyAIDJApp(ctk.CTk):
 
         self._log("Ready. Enter a request and press Play.")
 
+        def _preauth():
+            try:
+                self._spotify._get_client()
+            except Exception as e:
+                print(f"[auth] pre-auth failed: {e}")
+            self._start_player_poll()
+
+        self.after(800, _preauth)
+
     # ------------------------------------------------------------------
     # Playback logic
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Player bar controls
+    # ------------------------------------------------------------------
+
+    def _handle_like(self) -> None:
+        def _work():
+            ok, msg = self._spotify.like_current_track()
+            self._log(msg)
+            self.after(0, self._refresh_player_bar)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _handle_skip(self) -> None:
+        def _work():
+            ok, msg = self._spotify.skip_track()
+            if ok:
+                # Brief pause then refresh so Spotify has time to change tracks
+                import time; time.sleep(0.6)
+                self.after(0, self._refresh_player_bar)
+            else:
+                self._log(msg)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _handle_previous(self) -> None:
+        def _work():
+            ok, msg = self._spotify.previous_track()
+            if ok:
+                import time; time.sleep(0.6)
+                self.after(0, self._refresh_player_bar)
+            else:
+                self._log(msg)
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _refresh_player_bar(self) -> None:
+        """Poll Spotify for the current track and update the player bar."""
+        if not hasattr(self, "_track_label"):
+            return
+        def _work():
+            track = self._spotify.get_current_track()
+            self.after(0, lambda: self._update_player_bar(track))
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _update_player_bar(self, track: dict | None) -> None:
+        if not hasattr(self, "_track_label"):
+            return
+        if track:
+            self._track_label.configure(
+                text=f"{track['name']}  —  {track['artist']}",
+                text_color="white",
+            )
+            self._like_button.configure(text="♥" if track["is_liked"] else "♡")
+        else:
+            self._track_label.configure(text="Not playing", text_color="gray")
+            self._like_button.configure(text="♡")
+
+    def _start_player_poll(self) -> None:
+        """Poll current track every 5 seconds to keep the bar in sync."""
+        self._refresh_player_bar()
+        try:
+            self._poll_timer = self.after(5000, self._start_player_poll)
+        except Exception:
+            pass  # Window destroyed
 
     def _handle_play(self) -> None:
         """Triggered by the Play button or Enter key."""
         if self._is_playing:
             return
-
         request = self._request_entry.get().strip()
         if not request:
             self._log("Enter a request first.")
             return
-
+        self._spotify.last_request = request
         self._set_busy(True)
-        threading.Thread(target=self._play_worker, args=(request,), daemon=True).start()
+        threading.Thread(target=self._play_worker, args=(request, False), daemon=True).start()
 
-    def _play_worker(self, request: str) -> None:
+    def _handle_continue(self) -> None:
+        """Extend the current session with fresh tracks in the same vibe."""
+        if self._is_playing:
+            return
+        if not self._spotify.last_request:
+            self._log("Nothing playing yet — use Play first.")
+            return
+        self._set_busy(True)
+        threading.Thread(target=self._play_worker, args=(self._spotify.last_request, True), daemon=True).start()
+
+    def _play_worker(self, request: str, is_continue: bool = False) -> None:
         """
         Runs in a background thread.
         Calls the AI then Spotify, then schedules UI updates on the main thread.
         """
-        self._log(f'Request: "{request}"')
+        if is_continue:
+            self._log(f'Continuing: "{request}"')
+        else:
+            self._log(f'Request: "{request}"')
 
-        # Step 1 - AI generates a search query
+        # Step 1 - AI generates search queries
         try:
-            config    = load_config()
-            directives = get_vibe_params(request, config.get("gemini_api_key", ""))
-            self._log(f"AI reasoning: {directives.reasoning}")
-            self._log(f"Searching Spotify for: {directives.search_query}")
+            config = load_config()
+            api_key = config.get("gemini_api_key", "")
+            if is_continue:
+                from brain import get_continue_params
+                directives = get_continue_params(
+                    request,
+                    self._spotify.last_queries,
+                    api_key,
+                )
+            else:
+                directives = get_vibe_params(request, api_key)
+            self._log(f"AI: {directives.reasoning}")
+            self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
         except Exception as e:
             self.after(0, lambda: self._finish_worker(f"AI error: {e}", success=False))
             return
 
         # Step 2 - Search Spotify and start playback
         try:
-            result = self._spotify.search_and_play(directives.search_query)
+            result = self._spotify.search_and_play(directives)
         except Exception as e:
             self.after(0, lambda: self._finish_worker(f"Spotify error: {e}", success=False))
             return
 
         if result.success:
-            extra = f" (+{result.track_count - 1} more)" if result.track_count > 1 else ""
+            extra = f" — {result.track_count} tracks from {result.queries_run} searches" if result.track_count > 1 else ""
             self.after(
                 0,
                 lambda: self._finish_worker(
@@ -284,6 +435,9 @@ class SpotifyAIDJApp(ctk.CTk):
         """Called on the main thread once the background worker completes."""
         self._log(message, success=success)
         self._set_busy(False)
+        if success:
+            # Refresh player bar after a short delay to let Spotify catch up
+            self.after(1200, self._refresh_player_bar)
 
     def _set_busy(self, busy: bool) -> None:
         """Disable or re-enable input controls during a request."""
@@ -292,6 +446,7 @@ class SpotifyAIDJApp(ctk.CTk):
         self._play_button.configure(
             state=state, text="Working..." if busy else "Play"
         )
+        self._continue_button.configure(state=state)
         self._request_entry.configure(state=state)
 
     # ------------------------------------------------------------------

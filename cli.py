@@ -10,7 +10,6 @@ Invoked automatically by main.py when arguments are passed:
 Prints coloured status output to the terminal and exits when done.
 No GUI is launched. Safe to run over SSH or in scripts.
 """
-# The only reason I even implimented this was because SOMETIMES I don't wanna open a gui to do something, SOMETIMES a brother just wants to run something via command line. I hope others can relate to this hashtag struggle...
 
 import sys
 
@@ -39,17 +38,29 @@ def _warn(msg: str)    -> None: print(f"{_YELLOW}{_BOLD}[!]{_RESET} {msg}")
 def _error(msg: str)   -> None: print(f"{_RED}{_BOLD}[x]{_RESET} {msg}")
 
 
-def run_cli(request: str) -> int:
+# Persists between CLI calls within the same process (i.e. not between
+# separate dj invocations — use the GUI for multi-session continue).
+_cli_spotify_client: SpotifyClient | None = None
+
+
+def _get_cli_client() -> SpotifyClient:
+    global _cli_spotify_client
+    if _cli_spotify_client is None:
+        _cli_spotify_client = SpotifyClient()
+    return _cli_spotify_client
+
+
+def run_cli(request: str, is_continue: bool = False) -> int:
     """
-    Execute a single music request from the terminal.
+    Execute a music request from the terminal.
 
     Args:
-        request: Natural language music request, e.g. "dark techno"
+        request:     Natural language music request, e.g. "dark techno"
+        is_continue: If True, generate fresh queries that avoid previous ones
 
     Returns:
         Exit code - 0 for success, 1 for any error.
     """
-    # Guard: require setup before running headlessly.
     if not is_configured():
         _error("No Gemini API key found.")
         _warn(
@@ -60,29 +71,45 @@ def run_cli(request: str) -> int:
         )
         return 1
 
-    config = load_config()
+    config  = load_config()
+    api_key = config.get("gemini_api_key", "")
+    client  = _get_cli_client()
 
-    # Step 1 - AI generates a Spotify search query
-    _info(f'Request: "{request}"')
-    try:
-        directives = get_vibe_params(request, config.get("gemini_api_key", ""))
-        _info(f"AI reasoning:  {directives.reasoning}")
-        _info(f"Search query:  {directives.search_query}")
-    except Exception as e:
-        _error(f"AI error: {e}")
-        return 1
+    # Step 1 - AI generates search queries
+    if is_continue:
+        if not client.last_request:
+            _error("Nothing playing yet — run a normal request first.")
+            return 1
+        _info(f'Continuing: "{client.last_request}"')
+        try:
+            from brain import get_continue_params
+            directives = get_continue_params(client.last_request, client.last_queries, api_key)
+        except Exception as e:
+            _error(f"AI error: {e}")
+            return 1
+    else:
+        _info(f'Request: "{request}"')
+        client.last_request = request
+        try:
+            directives = get_vibe_params(request, api_key)
+        except Exception as e:
+            _error(f"AI error: {e}")
+            return 1
+
+    _info(f"AI: {directives.reasoning}")
+    _info(f"Queries ({len(directives.queries)}): {directives.queries}")
+    _info(f"Target queue: {directives.queue_size} tracks")
 
     # Step 2 - Search Spotify and start playback
     try:
-        client = SpotifyClient()
-        result = client.search_and_play(directives.search_query)
+        result = client.search_and_play(directives)
     except Exception as e:
         _error(f"Spotify error: {e}")
         return 1
 
     if result.success:
-        extra = f" (+{result.track_count - 1} more)" if result.track_count > 1 else ""
-        _success(f"Now playing: {_BOLD}{result.first_track}{_RESET}{extra}")
+        _success(f"Now playing: {_BOLD}{result.first_track}{_RESET}")
+        _info(f"{result.track_count} tracks queued from {result.queries_run} searches")
         return 0
     else:
         _error(result.message)
@@ -120,6 +147,9 @@ def print_help() -> None:
   dj "dark techno"
   dj "relaxing lo-fi for studying"
   python main.py "90s hip hop"
+
+{_BOLD}Continue playing (fresh tracks, same vibe){_RESET}:
+  dj --continue
 
 {_BOLD}First-time setup from terminal{_RESET} (skips the GUI setup screen):
   python main.py --set-key YOUR_GEMINI_API_KEY
