@@ -28,8 +28,7 @@ Spotify AI DJ sucks, what kinda DJ doesn't take requests?? Anyways, this one doe
 
 ```bash
 git clone https://github.com/schultz-dev0/SpotifyDJ
-```
-```
+
 ```
 
 ```bash
