@@ -3,18 +3,22 @@ spotify_client.py
 -----------------
 Handles Spotify OAuth authentication and playback control.
 
-DEVELOPER NOTE:
-  The credentials below belong to the Spotify app registered at
-  https://developer.spotify.com/dashboard
+Credentials are loaded from a .env file in the same directory as this script.
+The .env file is created automatically by the installer (install.sh / install.bat
+/ install_mac.sh). If you are setting up manually, create a .env file with:
 
-  If you fork this project and distribute it yourself, create your own
-  Spotify app and replace these values. In your app settings, add:
-    Redirect URI:  http://127.0.0.1:8888/callback
+  SPOTIPY_CLIENT_ID=your_client_id_here
+  SPOTIPY_CLIENT_SECRET=your_client_secret_here
+  SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
-  End users never need to touch this file.
+Get your credentials at: https://developer.spotify.com/dashboard
+Set the Redirect URI in your app settings to: http://127.0.0.1:8888/callback
 """
 
+import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import spotipy
@@ -23,11 +27,84 @@ from spotipy.oauth2 import SpotifyOAuth
 from config import get_spotify_cache_path
 
 # ------------------------------------------------------------------
-# Spotify app credentials - replace if you fork this project
+# Load credentials from .env file
 # ------------------------------------------------------------------
-SPOTIFY_CLIENT_ID     = "5bdc81a576f44cf5a566ef4fc793ed01"
-SPOTIFY_CLIENT_SECRET = "9073a2be454348fa854871da20c33c14"
-SPOTIFY_REDIRECT_URI  = "http://127.0.0.1:8888/callback"
+def _load_env_file() -> None:
+    """
+    Parse the .env file next to this script and inject values into
+    os.environ. Uses python-dotenv if available, otherwise falls back
+    to a simple manual parser so the app works even if dotenv is missing.
+    """
+    # Resolve .env relative to this file, not the working directory
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=env_path, override=False)
+        return
+    except ImportError:
+        pass
+
+    # Fallback: minimal .env parser (handles KEY=value and KEY="value")
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key   = key.strip()
+            value = value.strip().strip('"').strip("'")
+            os.environ.setdefault(key, value)   # setdefault: don't clobber shell env
+
+
+_load_env_file()
+
+# Read credentials from environment (set by .env loader above, the shell,
+# or the Spotify SDK's own env-var support).
+SPOTIFY_CLIENT_ID     = os.environ.get("SPOTIPY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "")
+SPOTIFY_REDIRECT_URI  = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
+
+# ------------------------------------------------------------------
+# Friendly startup check - fail early with a clear message
+# ------------------------------------------------------------------
+def _check_spotify_credentials() -> None:
+    """
+    Print a clear error and exit if Spotify credentials are missing.
+    Called once at import time so every entry point (GUI, CLI) gets the message.
+    """
+    if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+        return
+
+    missing = []
+    if not SPOTIFY_CLIENT_ID:
+        missing.append("  SPOTIPY_CLIENT_ID")
+    if not SPOTIFY_CLIENT_SECRET:
+        missing.append("  SPOTIPY_CLIENT_SECRET")
+
+    print(
+        "\n[error] Spotify credentials are not configured.\n"
+        "Missing from .env:\n"
+        + "\n".join(missing) + "\n\n"
+        "To fix this:\n"
+        "  1. Go to https://developer.spotify.com/dashboard and create an app.\n"
+        "  2. Set the Redirect URI to:  http://127.0.0.1:8888/callback\n"
+        "  3. Copy your Client ID and Client Secret.\n"
+        "  4. Create a file called  .env  in the app folder with:\n\n"
+        "       SPOTIPY_CLIENT_ID=your_id_here\n"
+        "       SPOTIPY_CLIENT_SECRET=your_secret_here\n"
+        "       SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback\n\n"
+        "  Or re-run the installer:  bash install.sh  (Linux)\n"
+        "                            bash install_mac.sh  (macOS)\n"
+        "                            install.bat  (Windows)\n",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+_check_spotify_credentials()
 # ------------------------------------------------------------------
 
 # OAuth scopes required by this app
