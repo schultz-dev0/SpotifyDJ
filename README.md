@@ -1,6 +1,8 @@
 # Spotify AI DJ
 
-Spotify AI DJ sucks, what kinda DJ doesn't take requests?? Anyways, this one doesn't suck, tell it what you wanna hear and it will play it. Read all of this though ↓
+Why does this exist? Spotify AI DJ sucks, what kinda DJ doesn't take requests?? While working I was having trouble picking out the right music to listen to, and I thought "Man it would be great if I could request a song from an AI that would truly understand what I want, I tried the spotify AI DJ but it really does suck. So I decided to make my own, kinda started out as a super small project, but I liked it so much that I made it into a full app that I can share and get others to use.
+
+Anyways, this one doesn't suck, tell it what you wanna hear and it will play it. Read all of this though ↓
 ---
 
 ## Requirements

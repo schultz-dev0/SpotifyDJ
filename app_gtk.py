@@ -19,6 +19,8 @@ Requires (installed by install.sh automatically):
   sudo pacman -S python-gobject gtk4
 """
 
+# If you are snooping through the source files, I decided to make a ctk and gtk version because a GUI that looks good is a good gui, don't tell anyone but AI wrote the app_ctk file lol. Idk how to do that stuff hashtag vibecode lmao
+
 import re
 import threading
 from datetime import datetime

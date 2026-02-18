@@ -10,6 +10,7 @@ Invoked automatically by main.py when arguments are passed:
 Prints coloured status output to the terminal and exits when done.
 No GUI is launched. Safe to run over SSH or in scripts.
 """
+# The only reason I even implimented this was because SOMETIMES I don't wanna open a gui to do something, SOMETIMES a brother just wants to run something via command line. I hope others can relate to this hashtag struggle...
 
 import sys
 
@@ -49,7 +50,6 @@ def run_cli(request: str) -> int:
         Exit code - 0 for success, 1 for any error.
     """
     # Guard: require setup before running headlessly.
-    # Without this check the user would get a cryptic auth error.
     if not is_configured():
         _error("No Gemini API key found.")
         _warn(

@@ -44,6 +44,7 @@ Output JSON: {{ "reasoning": "short explanation of your choices", "search_query"
 """
 
 # Words stripped out when falling back to keyword search
+# How DARE you say please... naughty user
 STOPWORDS = {
     "play", "some", "me", "i", "want", "can", "you",
     "please", "listen", "to", "for", "a", "put", "on", "the",
