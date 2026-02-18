@@ -5,6 +5,9 @@ Why does this exist? Spotify AI DJ sucks, what kinda DJ doesn't take requests?? 
 Anyways, this one doesn't suck, tell it what you wanna hear and it will play it. Read all of this though ↓
 ---
 
+## Preview
+![](https://github.com/schultz-dev0/)
+
 ## Requirements
 
 - A Spotify account — **playback control requires Spotify Premium**
