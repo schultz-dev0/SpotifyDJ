@@ -33,8 +33,9 @@ Anyways, this one doesn't suck, tell it what you wanna hear and it will play it.
 
 ```bash
 git clone https://github.com/schultz-dev0/SpotifyDJ ~/SpotifyDJ
-cd ~/SpotifyDJ
-./install.sh
+```
+``` bash
+./SpotifyDJ/install.sh
 ```
 
 The script detects your distro, package manager, and display server
@@ -56,6 +57,8 @@ from the project folder.
 
 ```bash
 git clone https://github.com/schultz-dev0/SpotifyDJ /Users/YourUserName/Downloads/SpotifyDJ
+```
+```bash
 bash /Users/YourUserName/Downloads/SpotifyDJ/install_mac.sh
 ```
 
