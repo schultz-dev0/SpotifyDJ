@@ -154,7 +154,7 @@ PIP_FLAGS=""
 $PYTHON_ABS -m pip install --help 2>&1 | grep -q "break-system-packages" \
   && PIP_FLAGS="--break-system-packages"
 
-$PYTHON_ABS -m pip install --upgrade pip --quiet $PIP_FLAGS
+#$PYTHON_ABS -m pip install --upgrade pip --quiet $PIP_FLAGS
 $PYTHON_ABS -m pip install -r "$SCRIPT_DIR/requirements.txt" --quiet $PIP_FLAGS
 
 success "Python dependencies installed."
