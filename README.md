@@ -27,7 +27,13 @@ Spotify AI DJ sucks, what kinda DJ doesn't take requests?? Anyways, this one doe
 ### Linux (all distros — Wayland and X11, it works well in hyprland, cuz I use hyprland)
 
 ```bash
-bash install.sh
+git clone https://github.com/schultz-dev0/SpotifyDJ
+```
+```
+```
+
+```bash
+install.sh
 ```
 
 The script detects your distro, package manager, and display server
