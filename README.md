@@ -7,6 +7,8 @@ Anyways, this one doesn't suck, tell it what you wanna hear and it will play it.
 
 ## Preview
 ![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-18-021252_hyprcap.png)
+![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-19-020341_hyprcap.png)
+
 
 ## Requirements
 
