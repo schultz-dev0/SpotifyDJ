@@ -131,7 +131,7 @@ dj --help
 ## Troubleshooting
 
 **"No Spotify device found"**
-Open Spotify on your phone, computer, or any device, then try again.
+Open Spotify on your computer then try again.
 The app can only control a device that already has Spotify running.
 
 **Playback starts but nothing plays / skips immediately**
@@ -141,6 +141,7 @@ Free accounts can search but cannot be controlled programmatically.
 **Gemini quota errors**
 The app automatically tries several models in sequence. If all fail it
 falls back to basic keyword search so you always get results.
+*If you use the app too much you will run out of request quota and you will need to wait, I suggest a local LLM if you know you will send a lot of requests*
 
 **Linux — GTK4 not found error**
 Run `bash install.sh` again. If you installed manually, make sure
@@ -262,3 +263,5 @@ pyinstaller --onefile --windowed --name "SpotifyAIDJ" main.py
 Output is placed in the `dist/` folder. Note that the GTK4 backend
 cannot be bundled this way — the PyInstaller build will always use
 the customtkinter backend regardless of platform.
+
+*Planned to make this available for phones but spotify actually made their own request DJ thing for phones so not doing that anymore*
