@@ -1,29 +1,35 @@
 # Spotify AI DJ
 
-Why does this exist? Spotify AI DJ sucks, what kinda DJ doesn't take requests?? While working I was having trouble picking out the right music to listen to, and I thought "Man it would be great if I could request a song from an AI that would truly understand what I want, I tried the spotify AI DJ but it really does suck. So I decided to make my own, kinda started out as a super small project, but I liked it so much that I made it into a full app that I can share and get others to use.
+**Why does this exist?**
+Spotify AI DJ sucks. What kinda DJ doesn't take requests??
 
-Anyways, this one doesn't suck, tell it what you wanna hear and it will play it. Read all of this though ↓
+While working, I was having trouble picking out the right music. I thought, "Man, it would be great if I could request a song from an AI that would truly understand what I want." I tried the official Spotify AI DJ, but it really does suck. So I decided to make my own.
+
+It started as a super small project, but I liked it so much that I made it into a full app to share.
+
+**Anyways, this one doesn't suck. Tell it what you wanna hear and it will play it.**
+
 ---
 
 ## Preview
 
-# Features:
-
- - Allows for music requests via "Play lofi music"
- - Allows for playlist playback via link and can intelligently queue up music similar to the playlist
- - Allows for Local LLM as well as Gemini via the Google AI studio API key 
- - Allows to toggle Local LLM only as seen in preview
- - Offers basic media playback as well as liking songs
-
 ![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-18-021252_hyprcap.png)
 ![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-19-020341_hyprcap.png)
 
+### Features
+* **Smart Requests:** Just type "Play lofi music" or "something fast for coding." 
+* **Playlist Intelligence:** Link a playlist and it can intelligently queue up similar music.
+* **Model support:** Use a Local LLM or Google Gemini via API.
+* **Toggle Control:** Switch between Local LLM or Cloud easily.
+* **Playback Control:** Basic media controls (play, pause, like songs).
+
+---
 
 ## Requirements
 
-- A Spotify account — **playback control requires Spotify Premium**
-- A free Gemini API key from [Google AI Studio](https://aistudio.google.com)
-  (Takes a few seconds to make, is free!! (a good thing))
+* **Spotify Premium** (Required for playback control via API).
+* **Gemini API Key** from [Google AI Studio](https://aistudio.google.com).
+    * *Note: It takes a few seconds to make and is free!! (a good thing).*
 
 ---
 
@@ -49,16 +55,6 @@ git clone https://github.com/schultz-dev0/SpotifyDJ ~/SpotifyDJ
 ./SpotifyDJ/install.sh
 ```
 
-The script detects your distro, package manager, and display server
-automatically.
-
-Supported distros: Any
-
-On **Wayland** (Hyprland, Sway, GNOME Wayland, etc.) the GTK4 backend is
-installed and the app runs as a native Wayland window.
-
-On **X11** the customtkinter backend is used instead.
-
 After install, launch via your application menu or run `bash launch.sh`
 from the project folder.
 
@@ -73,19 +69,8 @@ git clone https://github.com/schultz-dev0/SpotifyDJ /Users/YourUserName/Download
 bash /Users/YourUserName/Downloads/SpotifyDJ/install_mac.sh
 ```
 
-The script installs Homebrew if needed, then Python, tkinter, and all
-dependencies. It also creates **`Spotify AI DJ.app`** in `~/Applications`
+Creates **`Spotify AI DJ.app`** in `~/Applications`
 which you can drag into the Dock.
-
----
-
-### First launch (all platforms)
-
-On first run, the app will ask for your Gemini API key — paste it in and
-press Continue. This is a one-time step.
-
-On first play, your browser will open and ask you to log in to Spotify.
-After that the token is saved and you will not be asked again.
 
 ---
 
@@ -93,22 +78,18 @@ After that the token is saved and you will not be asked again.
 
 ### GUI mode
 
-Launch with no arguments to open the graphical window:
-
+To open graphical window, launch from application launcher or:
 ```bash
 dj
 python main.py
 ```
-
 Type your request and press **Play** or **Enter**.
 
 ---
 
 ### CLI mode (Linux / macOS)
 
-Pass your request as an argument — plays immediately, no window opens.
-Perfect for terminal workflows, scripts, or keybinds.
-
+Pass your request as an argument to a global `dj` command:
 ```bash
 dj "dark techno"
 dj "relaxing lo-fi for studying"
@@ -116,13 +97,10 @@ dj "90s hip hop"
 dj "aggressive drum and bass"
 dj "something cinematic and intense"
 ```
-
 On Windows, use Python directly since the `dj` command is not installed:
-
 ```bash
 python main.py "dark techno"
 ```
-
 ---
 
 ### First-time key setup from terminal
@@ -143,10 +121,11 @@ dj --help
 
 ### To do list
 
- -[ ] Learning music preferences
- -[ ] Expand the example library for better prompt recognition
+ - [ ] Learning music preferences
+ - [ ] Expand the example library for better prompt recognition
  - [ ] (For me) watch user suggestions for improvements
-
+ - [ ] Uninstall script
+ 
 ---
 
 ## Troubleshooting
@@ -180,7 +159,6 @@ The setup screen will appear on next launch.
 ---
 
 ## For Developers
-(For clarity this section was made with Gemini because I suck at explaining things)
 
 ### Project structure
 
@@ -246,6 +224,7 @@ SPOTIFY_CLIENT_SECRET = "your_client_secret"
 
 Edit `CANDIDATE_MODELS` in `brain.py`. Models are tried in order — put
 the fastest or most quota-generous ones first.
+Gemini is NOT required to run it but if you intend to use a free AI agent, it is the best provider to use
 
 ### Hyprland window rules
 
