@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 import json
+import re
 import requests
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -92,6 +93,8 @@ SPOTIFY_SCOPE = " ".join([
     "user-library-modify",
     # user-library-read excluded: contains endpoint returns 403 for new apps
     "user-read-private",
+    "playlist-read-private",
+    "playlist-read-collaborative",
 ])
 
 
@@ -301,6 +304,115 @@ class SpotifyClient:
         except Exception as e:
             return False, f"Previous error: {e}"
 
+    def get_playlist_tracks(self, playlist_url: str) -> list[dict]:
+        """
+        Fetch all tracks from a Spotify playlist URL or URI.
+        Uses raw HTTP (not spotipy wrapper) to avoid market=None / fields=None
+        being sent as explicit params which Spotify rejects with 403.
+        Handles pagination automatically for large playlists.
+        """
+        import re
+        match = re.search(r"playlist[/:]([A-Za-z0-9]+)", playlist_url)
+        if not match:
+            raise ValueError(f"Could not extract playlist ID from: {playlist_url!r}")
+
+        playlist_id = match.group(1)
+        token  = self._get_token()
+        tracks = []
+        url    = f"https://api.spotify.com/v1/playlists/{playlist_id}/items"
+
+        while url:
+            resp = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"limit": 100, "fields": "next,items(track(id,uri,name,artists))"},
+                timeout=15,
+            )
+            if not resp.ok:
+                raise Exception(f"http status: {resp.status_code} - {resp.text[:200]}")
+            data  = resp.json()
+            items = data.get("items", [])
+            for item in items:
+                track = item.get("track")
+                if track and track.get("uri") and track.get("id"):
+                    tracks.append(track)
+            url = data.get("next")  # None when no more pages
+
+        print(f"[spotify] Fetched {len(tracks)} tracks from playlist {playlist_id}")
+        return tracks
+
+    def search_and_play_mixed(
+        self,
+        playlist_tracks: list[dict],
+        directives,
+        mix_ratio: float = 0.5,
+    ) -> PlayResult:
+        """
+        Mix playlist tracks with AI-searched tracks and start playback.
+        mix_ratio: fraction of queue from the playlist (0.5 = 50/50).
+        Tracks are interleaved so playlist and discovered songs alternate.
+        """
+        import random
+
+        queue_size = max(1, min(200, getattr(directives, "queue_size", 50)))
+        n_playlist = int(queue_size * mix_ratio)
+        n_search   = queue_size - n_playlist
+
+        # Shuffle and sample from the playlist
+        playlist_sample = list(playlist_tracks)
+        random.shuffle(playlist_sample)
+        playlist_sample = playlist_sample[:n_playlist]
+
+        # Build search pool, excluding tracks already in the playlist
+        playlist_uris = {t.get("uri") for t in playlist_tracks}
+        search_pool   = self._build_track_pool(directives.queries, target=n_search * 3)
+        search_pool   = [t for t in search_pool if t.get("uri") not in playlist_uris]
+        search_pool   = search_pool[:n_search]
+
+        # Interleave: playlist, search, playlist, search...
+        mixed = []
+        pi, si = 0, 0
+        while pi < len(playlist_sample) or si < len(search_pool):
+            if pi < len(playlist_sample):
+                mixed.append(playlist_sample[pi]); pi += 1
+            if si < len(search_pool):
+                mixed.append(search_pool[si]); si += 1
+
+        if not mixed:
+            return PlayResult(success=False, message="No tracks found to queue.")
+
+        device_id = self._find_device_id()
+        if not device_id:
+            return PlayResult(
+                success=False,
+                message="No Spotify device found. Open Spotify on any device first.",
+            )
+
+        uris   = [t["uri"] for t in mixed]
+        first  = mixed[0]
+        artist = first["artists"][0]["name"] if first.get("artists") else "Unknown"
+        label  = f"{first['name']} - {artist}"
+
+        try:
+            self._get_client().start_playback(device_id=device_id, uris=uris)
+        except Exception as e:
+            return PlayResult(success=False, message=f"Playback error: {e}")
+
+        if hasattr(directives, "queries"):
+            self.last_queries = directives.queries
+        for t in mixed:
+            uri = t.get("uri")
+            if uri:
+                self.played_uris.add(uri)
+
+        return PlayResult(
+            success=True,
+            message="Playback started.",
+            first_track=label,
+            track_count=len(mixed),
+            queries_run=len(getattr(directives, "queries", [])),
+        )
+
     def search_and_play(self, directives) -> PlayResult:
         """
         Build a queue from AI-generated directives and start playback.
@@ -367,10 +479,12 @@ class SpotifyClient:
             first_track=label,
             track_count=len(tracks),
             queries_run=len(queries),
-        )
+        ) 
 
 # if i get one more http 400 i will actually fucking crash out dude 20:20 feb 18
 # oh the issue was I was making the API call wrong... whoops, works fine now, still collects only 10 raw tracks per request 20:26
 # this will probably be frowned upon by I used claude to add a bunch of GUI specific stuff and media playback. Code might now look different here than everyone else. Oh well
 
 # tracking playback is ehhh work in progress, since it's not available via spotify I need to do it locally. Noted, do not ask AI to do a thing you can do yourself
+
+# I have added a feature which SHOULD work that will allow you to paste a link and ask for "similar music" it accepts playlists and artists

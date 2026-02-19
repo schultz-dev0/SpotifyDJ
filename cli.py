@@ -13,7 +13,7 @@ No GUI is launched. Safe to run over SSH or in scripts.
 
 import sys
 
-from brain import get_vibe_params
+from brain import get_vibe_params, get_playlist_vibe_params
 from config import is_configured, load_config
 from spotify_client import SpotifyClient
 
@@ -71,9 +71,16 @@ def run_cli(request: str, is_continue: bool = False) -> int:
         )
         return 1
 
-    config  = load_config()
-    api_key = config.get("gemini_api_key", "")
-    client  = _get_cli_client()
+    config     = load_config()
+    api_key    = config.get("gemini_api_key", "")
+    local_only = config.get("local_ai_only", False)
+    client     = _get_cli_client()
+
+    import re as _re
+    playlist_url = _re.search(
+        r"(https?://open\.spotify\.com/playlist/[A-Za-z0-9]+|spotify:playlist:[A-Za-z0-9]+)",
+        request or ""
+    )
 
     # Step 1 - AI generates search queries
     if is_continue:
@@ -83,15 +90,32 @@ def run_cli(request: str, is_continue: bool = False) -> int:
         _info(f'Continuing: "{client.last_request}"')
         try:
             from brain import get_continue_params
-            directives = get_continue_params(client.last_request, client.last_queries, api_key)
+            directives = get_continue_params(client.last_request, client.last_queries, api_key, local_only=local_only)
+        except Exception as e:
+            _error(f"AI error: {e}")
+            return 1
+        playlist_tracks = None
+    elif playlist_url:
+        _info("Playlist URL detected — fetching tracks...")
+        try:
+            playlist_tracks = client.get_playlist_tracks(playlist_url.group(0))
+            _info(f"Fetched {len(playlist_tracks)} tracks from playlist")
+        except Exception as e:
+            _error(f"Playlist error: {e}")
+            return 1
+        user_intent = _re.sub(r"https?://\S+|spotify:\S+", "", request).strip()
+        client.last_request = request
+        try:
+            directives = get_playlist_vibe_params(playlist_tracks, user_intent, api_key, local_only=local_only)
         except Exception as e:
             _error(f"AI error: {e}")
             return 1
     else:
+        playlist_tracks = None
         _info(f'Request: "{request}"')
         client.last_request = request
         try:
-            directives = get_vibe_params(request, api_key)
+            directives = get_vibe_params(request, api_key, local_only=local_only)
         except Exception as e:
             _error(f"AI error: {e}")
             return 1
@@ -102,7 +126,10 @@ def run_cli(request: str, is_continue: bool = False) -> int:
 
     # Step 2 - Search Spotify and start playback
     try:
-        result = client.search_and_play(directives)
+        if playlist_tracks is not None:
+            result = client.search_and_play_mixed(playlist_tracks, directives)
+        else:
+            result = client.search_and_play(directives)
     except Exception as e:
         _error(f"Spotify error: {e}")
         return 1

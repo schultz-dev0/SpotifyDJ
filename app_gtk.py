@@ -29,8 +29,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
 
-from brain import get_vibe_params
-from config import is_configured, load_config, save_config
+from brain import get_vibe_params, get_playlist_vibe_params
+from config import is_configured, load_config, save_config, load_env_llm_config, save_env_llm_config
 from spotify_client import SpotifyClient
 
 APP_TITLE = "Spotify AI DJ"
@@ -180,14 +180,37 @@ def _build_css(c: dict) -> bytes:
     button.secondary:hover {{ background-color: {c['surface']}; }}
     .player-bar {{
         background-color: {c['surface']};
+        border-radius: 10px;
+        padding: 10px 16px;
+    }}
+    .player-control {{
+        background-color: transparent;
+        color: {c['text']};
+        border: 1px solid {c['overlay']};
         border-radius: 8px;
-        padding: 8px 12px;
+        padding: 4px 0;
+        font-size: 16px;
+        min-width: 40px;
+    }}
+    .player-control:hover {{ background-color: {c['surface']}; }}
+    switch {{
+        background-color: {c['overlay']};
+        border-radius: 14px;
+    }}
+    switch:checked {{
+        background-color: {c['primary']};
+    }}
+    switch slider {{
+        background-color: {c['text']};
+        border-radius: 12px;
+        min-width: 20px;
+        min-height: 20px;
     }}
     .log-view {{
         background-color: {c['bg_alt']};
         color: {c['subtext']};
-        border-radius: 8px;
-        padding: 8px;
+        border-radius: 10px;
+        padding: 12px 14px;
         font-family: monospace;
         font-size: 12px;
     }}
@@ -356,17 +379,17 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
 
     def _build_player_screen(self) -> None:
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        outer.set_margin_start(20)
-        outer.set_margin_end(20)
-        outer.set_margin_top(20)
-        outer.set_margin_bottom(20)
+        outer.set_margin_start(28)
+        outer.set_margin_end(28)
+        outer.set_margin_top(24)
+        outer.set_margin_bottom(24)
 
         # Top bar
         top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        top_bar.set_margin_bottom(24)
+        top_bar.set_margin_bottom(20)
 
         title_label = Gtk.Label(label=APP_TITLE)
-        title_label.add_css_class("title-medium")
+        title_label.add_css_class("title-large")
         title_label.set_hexpand(True)
         title_label.set_halign(Gtk.Align.START)
         top_bar.append(title_label)
@@ -421,17 +444,17 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
         self._prev_button = Gtk.Button(label="⏮")
-        self._prev_button.add_css_class("secondary")
+        self._prev_button.add_css_class("player-control")
         self._prev_button.connect("clicked", lambda _: self._handle_previous())
         controls.append(self._prev_button)
 
         self._next_button = Gtk.Button(label="⏭")
-        self._next_button.add_css_class("secondary")
+        self._next_button.add_css_class("player-control")
         self._next_button.connect("clicked", lambda _: self._handle_skip())
         controls.append(self._next_button)
 
         self._like_button = Gtk.Button(label="♡")
-        self._like_button.add_css_class("secondary")
+        self._like_button.add_css_class("player-control")
         self._like_button.connect("clicked", lambda _: self._handle_like())
         controls.append(self._like_button)
 
@@ -441,7 +464,9 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         # Activity log
         activity_label = Gtk.Label(label="Activity")
         activity_label.set_halign(Gtk.Align.START)
+        activity_label.add_css_class("label-muted")
         activity_label.set_margin_bottom(6)
+        activity_label.set_margin_top(4)
         outer.append(activity_label)
 
         self._log_buffer = Gtk.TextBuffer()
@@ -572,19 +597,46 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
             self._log(f'Request: "{request}"')
 
         try:
-            config  = load_config()
-            api_key = config.get("gemini_api_key", "")
+            config     = load_config()
+            api_key    = config.get("gemini_api_key", "")
+            local_only = config.get("local_ai_only", False)
+
+            # Detect playlist URL in request
+            import re as _re
+            playlist_url = _re.search(
+                r"(https?://open\.spotify\.com/playlist/[A-Za-z0-9]+|spotify:playlist:[A-Za-z0-9]+)",
+                request
+            )
+
             if is_continue:
                 from brain import get_continue_params
                 directives = get_continue_params(
-                    request,
+                    self._spotify.last_request,
                     self._spotify.last_queries,
                     api_key,
+                    local_only=local_only,
                 )
+                playlist_tracks = None
+            elif playlist_url:
+                self._log("Playlist detected — fetching tracks...")
+                try:
+                    playlist_tracks = self._spotify.get_playlist_tracks(playlist_url.group(0))
+                    self._log(f"Fetched {len(playlist_tracks)} tracks from playlist")
+                except Exception as e:
+                    GLib.idle_add(self._finish_worker, f"Playlist error: {e}", False)
+                    return
+                # Strip the URL from the prompt so the AI sees only the user's intent
+                user_intent = _re.sub(r"https?://\S+|spotify:\S+", "", request).strip()
+                directives = get_playlist_vibe_params(
+                    playlist_tracks, user_intent, api_key, local_only=local_only
+                )
+                self._log(f"AI: {directives.reasoning}")
+                self._log(f"Running {len(directives.queries)} searches for similar tracks...")
             else:
-                directives = get_vibe_params(request, api_key)
-            self._log(f"AI: {directives.reasoning}")
-            self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
+                playlist_tracks = None
+                directives = get_vibe_params(request, api_key, local_only=local_only)
+                self._log(f"AI: {directives.reasoning}")
+                self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
         except Exception as e:
             GLib.idle_add(self._finish_worker, f"AI error: {e}", False)
             return
@@ -620,10 +672,12 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
 
     def _open_settings_dialog(self) -> None:
+        llm_cfg = load_env_llm_config()
+
         dialog = Gtk.Window(title="Settings")
         dialog.set_transient_for(self)
         dialog.set_modal(True)
-        dialog.set_default_size(420, 240)
+        dialog.set_default_size(460, 490)
         dialog.set_resizable(False)
 
         frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -633,48 +687,108 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         frame.set_margin_bottom(32)
         dialog.set_child(frame)
 
-        heading = Gtk.Label(label="Settings")
-        heading.add_css_class("title-medium")
-        heading.set_halign(Gtk.Align.START)
-        heading.set_margin_bottom(16)
-        frame.append(heading)
+        def _section(title: str, margin_top: int = 0) -> None:
+            lbl = Gtk.Label(label=title)
+            lbl.add_css_class("title-medium")
+            lbl.set_halign(Gtk.Align.START)
+            lbl.set_margin_top(margin_top)
+            lbl.set_margin_bottom(10)
+            frame.append(lbl)
 
-        key_label = Gtk.Label(label="Gemini API Key")
-        key_label.set_halign(Gtk.Align.START)
-        key_label.set_margin_bottom(4)
-        frame.append(key_label)
+        def _field(label: str, value: str, placeholder: str = "") -> Gtk.Entry:
+            lbl = Gtk.Label(label=label)
+            lbl.set_halign(Gtk.Align.START)
+            lbl.set_margin_bottom(3)
+            frame.append(lbl)
+            entry = Gtk.Entry()
+            entry.set_text(value)
+            if placeholder:
+                entry.set_placeholder_text(placeholder)
+            entry.set_margin_bottom(10)
+            frame.append(entry)
+            return entry
 
-        key_entry = _make_key_entry()
-        key_entry.set_text(self._config.get("gemini_api_key", ""))
-        key_entry.set_margin_bottom(8)
-        frame.append(key_entry)
+        # ---- Gemini ----
+        _section("Gemini API Key")
+        gemini_entry = _make_key_entry()
+        gemini_entry.set_text(self._config.get("gemini_api_key", ""))
+        gemini_entry.set_placeholder_text("AIza...")
+        gemini_entry.set_margin_bottom(16)
+        frame.append(gemini_entry)
 
+        # ---- Local LLM ----
+        _section("Local LLM  (optional)", margin_top=4)
+
+        hint = Gtk.Label(label="Leave blank to use Gemini only. Ollama: http://localhost:11434")
+        hint.add_css_class("label-muted")
+        hint.set_halign(Gtk.Align.START)
+        hint.set_wrap(True)
+        hint.set_margin_bottom(10)
+        frame.append(hint)
+
+        url_entry   = _field("Base URL",  llm_cfg["base_url"],  "http://localhost:11434")
+        key_entry   = _field("API Key",   llm_cfg["api_key"],   "sk-... or leave blank for Ollama")
+        model_entry = _field("Model",     llm_cfg["model"],     "llama3.2:latest")
+
+        # ---- Local only toggle ----
+        toggle_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        toggle_row.set_margin_top(8)
+        toggle_row.set_margin_bottom(16)
+
+        local_only_switch = Gtk.Switch()
+        local_only_switch.set_active(self._config.get("local_ai_only", False))
+        local_only_switch.set_valign(Gtk.Align.CENTER)
+
+        toggle_label = Gtk.Label(label="Use local AI only  (skip Gemini entirely)")
+        toggle_label.set_halign(Gtk.Align.START)
+        toggle_label.set_hexpand(True)
+
+        toggle_row.append(toggle_label)
+        toggle_row.append(local_only_switch)
+        frame.append(toggle_row)
+
+        # ---- Error / buttons ----
         error_label = Gtk.Label(label="")
         error_label.add_css_class("label-error")
         error_label.set_halign(Gtk.Align.START)
-        error_label.set_margin_bottom(12)
+        error_label.set_margin_bottom(10)
         frame.append(error_label)
 
+        btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        frame.append(btn_row)
+
         def save(_btn) -> None:
-            new_key = key_entry.get_text().strip()
-            if not new_key:
-                error_label.set_text("Key cannot be empty.")
+            using_local_only = local_only_switch.get_active()
+            new_gemini = gemini_entry.get_text().strip()
+
+            # Gemini key only required when not in local-only mode
+            if not using_local_only and not new_gemini:
+                error_label.set_text("Gemini API key required (or enable local-only mode).")
                 return
-            self._config["gemini_api_key"] = new_key
+
+            self._config["gemini_api_key"] = new_gemini
+            self._config["local_ai_only"]  = using_local_only
             save_config(self._config)
-            self._log("Gemini API key updated.")
+
+            save_env_llm_config(
+                base_url = url_entry.get_text().strip(),
+                api_key  = key_entry.get_text().strip(),
+                model    = model_entry.get_text().strip() or "llama3.2:latest",
+            )
+            mode = "local-only" if using_local_only else "Gemini + local fallback"
+            self._log(f"Settings saved. AI mode: {mode}")
             dialog.close()
 
         save_btn = Gtk.Button(label="Save")
         save_btn.add_css_class("primary")
+        save_btn.set_hexpand(True)
         save_btn.connect("clicked", save)
-        save_btn.set_margin_bottom(8)
-        frame.append(save_btn)
+        btn_row.append(save_btn)
 
         cancel_btn = Gtk.Button(label="Cancel")
         cancel_btn.add_css_class("secondary")
         cancel_btn.connect("clicked", lambda _: dialog.close())
-        frame.append(cancel_btn)
+        btn_row.append(cancel_btn)
 
         dialog.present()
 

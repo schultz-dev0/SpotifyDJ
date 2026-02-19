@@ -17,8 +17,8 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from brain import get_vibe_params
-from config import is_configured, load_config, save_config
+from brain import get_vibe_params, get_playlist_vibe_params
+from config import is_configured, load_config, save_config, load_env_llm_config, save_env_llm_config
 from spotify_client import SpotifyClient
 
 ctk.set_appearance_mode("dark")
@@ -396,26 +396,54 @@ class SpotifyAIDJApp(ctk.CTk):
 
         # Step 1 - AI generates search queries
         try:
-            config = load_config()
-            api_key = config.get("gemini_api_key", "")
+            config     = load_config()
+            api_key    = config.get("gemini_api_key", "")
+            local_only = config.get("local_ai_only", False)
+
+            import re as _re
+            playlist_url = _re.search(
+                r"(https?://open\.spotify\.com/playlist/[A-Za-z0-9]+|spotify:playlist:[A-Za-z0-9]+)",
+                request
+            )
+
             if is_continue:
                 from brain import get_continue_params
                 directives = get_continue_params(
-                    request,
+                    self._spotify.last_request,
                     self._spotify.last_queries,
                     api_key,
+                    local_only=local_only,
                 )
+                playlist_tracks = None
+            elif playlist_url:
+                self._log("Playlist detected — fetching tracks...")
+                try:
+                    playlist_tracks = self._spotify.get_playlist_tracks(playlist_url.group(0))
+                    self._log(f"Fetched {len(playlist_tracks)} tracks from playlist")
+                except Exception as e:
+                    self.after(0, lambda: self._finish_worker(f"Playlist error: {e}", success=False))
+                    return
+                user_intent = _re.sub(r"https?://\S+|spotify:\S+", "", request).strip()
+                directives = get_playlist_vibe_params(
+                    playlist_tracks, user_intent, api_key, local_only=local_only
+                )
+                self._log(f"AI: {directives.reasoning}")
+                self._log(f"Running {len(directives.queries)} searches for similar tracks...")
             else:
-                directives = get_vibe_params(request, api_key)
-            self._log(f"AI: {directives.reasoning}")
-            self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
+                playlist_tracks = None
+                directives = get_vibe_params(request, api_key, local_only=local_only)
+                self._log(f"AI: {directives.reasoning}")
+                self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
         except Exception as e:
             self.after(0, lambda: self._finish_worker(f"AI error: {e}", success=False))
             return
 
         # Step 2 - Search Spotify and start playback
         try:
-            result = self._spotify.search_and_play(directives)
+            if playlist_tracks is not None:
+                result = self._spotify.search_and_play_mixed(playlist_tracks, directives)
+            else:
+                result = self._spotify.search_and_play(directives)
         except Exception as e:
             self.after(0, lambda: self._finish_worker(f"Spotify error: {e}", success=False))
             return
@@ -454,54 +482,95 @@ class SpotifyAIDJApp(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _open_settings_dialog(self) -> None:
-        """Modal window for updating the Gemini API key."""
+        llm_cfg = load_env_llm_config()
+
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("420x260")
+        dialog.geometry("480x520")
         dialog.resizable(False, False)
         dialog.grab_set()
 
-        frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        frame.pack(expand=True, fill="both", padx=32, pady=32)
+        frame = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=32, pady=28)
 
-        ctk.CTkLabel(frame, text="Settings", font=("Helvetica", 18, "bold")).pack(
-            anchor="w", pady=(0, 16)
-        )
-        ctk.CTkLabel(frame, text="Gemini API Key", font=FONT_BODY).pack(anchor="w")
+        def _label(text: str, bold: bool = False, muted: bool = False) -> None:
+            font = ("Helvetica", 13, "bold") if bold else ("Helvetica", 12)
+            color = "gray" if muted else None
+            kw = {"text": text, "font": font, "anchor": "w"}
+            if color:
+                kw["text_color"] = color
+            ctk.CTkLabel(frame, **kw).pack(fill="x", pady=(8, 2))
 
-        key_entry = ctk.CTkEntry(frame, height=40, show="*", font=FONT_BODY)
-        key_entry.insert(0, self._config.get("gemini_api_key", ""))
-        key_entry.pack(fill="x", pady=(4, 16))
+        def _entry(value: str, placeholder: str = "", secret: bool = False) -> ctk.CTkEntry:
+            e = ctk.CTkEntry(frame, height=36, placeholder_text=placeholder)
+            if secret:
+                e.configure(show="•")
+            e.insert(0, value)
+            e.pack(fill="x", pady=(0, 4))
+            return e
 
-        error_label = ctk.CTkLabel(frame, text="", text_color=COLOR_ERROR, font=FONT_SMALL)
-        error_label.pack()
+        # ---- Gemini ----
+        _label("Gemini API Key", bold=True)
+        gemini_entry = _entry(self._config.get("gemini_api_key", ""), "AIza...", secret=True)
+
+        # ---- Local LLM ----
+        ctk.CTkLabel(frame, text="", height=8).pack()  # spacer
+        _label("Local LLM  (optional)", bold=True)
+        _label("Leave blank to use Gemini only. Ollama: http://localhost:11434", muted=True)
+
+        url_entry   = _entry(llm_cfg["base_url"],  "http://localhost:11434")
+        _label("API Key  (Ollama: leave blank)")
+        key_entry   = _entry(llm_cfg["api_key"],   "sk-... or leave blank")
+        _label("Model")
+        model_entry = _entry(llm_cfg["model"],     "llama3.2:latest")
+
+        # ---- Local only toggle ----
+        ctk.CTkLabel(frame, text="", height=4).pack()  # spacer
+        toggle_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        toggle_frame.pack(fill="x", pady=(4, 8))
+
+        local_only_var = ctk.BooleanVar(value=self._config.get("local_ai_only", False))
+        ctk.CTkLabel(
+            toggle_frame,
+            text="Use local AI only  (skip Gemini entirely)",
+            font=("Helvetica", 12),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkSwitch(
+            toggle_frame, text="", variable=local_only_var, width=46
+        ).pack(side="right")
+
+        # ---- Error + buttons ----
+        error_label = ctk.CTkLabel(frame, text="", text_color="red", anchor="w")
+        error_label.pack(fill="x", pady=(4, 0))
 
         def save() -> None:
-            new_key = key_entry.get().strip()
-            if not new_key:
-                error_label.configure(text="Key cannot be empty.")
+            using_local_only = local_only_var.get()
+            new_gemini = gemini_entry.get().strip()
+            if not using_local_only and not new_gemini:
+                error_label.configure(text="Gemini API key required (or enable local-only mode).")
                 return
-            self._config["gemini_api_key"] = new_key
+            self._config["gemini_api_key"] = new_gemini
+            self._config["local_ai_only"]  = using_local_only
             save_config(self._config)
-            self._log("Gemini API key updated.")
+            save_env_llm_config(
+                base_url = url_entry.get().strip(),
+                api_key  = key_entry.get().strip(),
+                model    = model_entry.get().strip() or "llama3.2:latest",
+            )
+            mode = "local-only" if using_local_only else "Gemini + local fallback"
+            self._log(f"Settings saved. AI mode: {mode}")
             dialog.destroy()
 
-        ctk.CTkButton(
-            frame, text="Save", height=40, font=FONT_BODY, command=save
-        ).pack(fill="x", pady=(4, 8))
-        ctk.CTkButton(
-            frame,
-            text="Cancel",
-            height=40,
-            font=FONT_BODY,
-            fg_color="transparent",
-            border_width=1,
-            command=dialog.destroy,
-        ).pack(fill="x")
+        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(12, 0))
 
-    # ------------------------------------------------------------------
-    # Log helper
-    # ------------------------------------------------------------------
+        ctk.CTkButton(btn_frame, text="Save", height=38,
+                      command=save).pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkButton(btn_frame, text="Cancel", height=38,
+                      fg_color="transparent", border_width=1,
+                      command=dialog.destroy).pack(side="left")
+
 
     def _log(self, message: str, success: bool = None) -> None:
         """
