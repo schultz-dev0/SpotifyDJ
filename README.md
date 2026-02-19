@@ -6,6 +6,15 @@ Anyways, this one doesn't suck, tell it what you wanna hear and it will play it.
 ---
 
 ## Preview
+
+# Features:
+
+ - Allows for music requests via "Play lofi music"
+ - Allows for playlist playback via link and can intelligently queue up music similar to the playlist
+ - Allows for Local LLM as well as Gemini via the Google AI studio API key 
+ - Allows to toggle Local LLM only as seen in preview
+ - Offers basic media playback as well as liking songs
+
 ![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-18-021252_hyprcap.png)
 ![](https://github.com/schultz-dev0/SpotifyDJ/blob/main/Preview/2026-02-19-020341_hyprcap.png)
 
@@ -131,6 +140,12 @@ dj --set-key YOUR_GEMINI_API_KEY
 ```bash
 dj --help
 ```
+
+### To do list
+
+ -[ ] Learning music preferences
+ -[ ] Expand the example library for better prompt recognition
+ - [ ] (For me) watch user suggestions for improvements
 
 ---
 
