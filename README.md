@@ -31,7 +31,7 @@ It started as a super small project, but I liked it so much that I made it into 
 * **Spotify Premium** (Required for playback control via API).
 * **Gemini API Key** from [Google AI Studio](https://aistudio.google.com).
     * *Note: It takes a few seconds to make and is free!! (a good thing).*
-* **Or: Ollama running locally** no API key needed, fully private, works offline.
+* **Or: Ollama running locally** no API key needed, fully private.
 
 ---
 
