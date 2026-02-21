@@ -273,16 +273,44 @@ class SpotifyAIDJApp(ctk.CTk):
         )
         self._like_button.pack(side="left", padx=2)
 
-        # Activity log
-        log_frame = ctk.CTkFrame(self, fg_color="transparent")
-        log_frame.pack(fill="both", expand=True, padx=20, pady=(16, 20))
+        # Volume
+        vol_frame = ctk.CTkFrame(controls, fg_color="transparent")
+        vol_frame.pack(side="left", padx=(6, 0))
 
-        ctk.CTkLabel(log_frame, text="Activity", font=("Helvetica", 13, "bold")).pack(
-            anchor="w", pady=(0, 6)
+        ctk.CTkLabel(vol_frame, text="", font=("Helvetica", 11), text_color="gray").pack(side="left")
+        self._vol_slider = ctk.CTkSlider(
+            vol_frame, from_=0, to=100, width=80, height=16,
+            command=self._on_volume_changed,
         )
+        self._vol_slider.set(50)
+        self._vol_slider.pack(side="left", padx=(2, 0))
+
+        # Bottom pane: queue + log side by side
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.pack(fill="both", expand=True, padx=20, pady=(16, 20))
+
+        # Queue panel
+        queue_col = ctk.CTkFrame(bottom_frame, fg_color="transparent", width=180)
+        queue_col.pack(side="left", fill="both", padx=(0, 10))
+        queue_col.pack_propagate(False)
+
+        ctk.CTkLabel(queue_col, text="UP NEXT", font=("Helvetica", 11, "bold"),
+                     text_color="gray").pack(anchor="w", pady=(0, 6))
+
+        self._queue_box = ctk.CTkTextbox(
+            queue_col, font=FONT_LOG, state="disabled", wrap="word", width=170
+        )
+        self._queue_box.pack(fill="both", expand=True)
+
+        # Activity log
+        log_col = ctk.CTkFrame(bottom_frame, fg_color="transparent")
+        log_col.pack(side="left", fill="both", expand=True)
+
+        ctk.CTkLabel(log_col, text="ACTIVITY", font=("Helvetica", 11, "bold"),
+                     text_color="gray").pack(anchor="w", pady=(0, 6))
 
         self._log_box = ctk.CTkTextbox(
-            log_frame, font=FONT_LOG, state="disabled", wrap="word"
+            log_col, font=FONT_LOG, state="disabled", wrap="word"
         )
         self._log_box.pack(fill="both", expand=True)
 
@@ -337,6 +365,13 @@ class SpotifyAIDJApp(ctk.CTk):
                 self._log(msg)
         threading.Thread(target=_work, daemon=True).start()
 
+    def _on_volume_changed(self, val: float) -> None:
+        """Debounced: fires Spotify API call 400ms after slider stops moving."""
+        vol = int(val)
+        if hasattr(self, "_vol_timer"):
+            self.after_cancel(self._vol_timer)
+        self._vol_timer = self.after(400, lambda: self._spotify.set_volume(vol))
+
     def _refresh_player_bar(self) -> None:
         """Poll Spotify for the current track and update the player bar."""
         if not hasattr(self, "_track_label"):
@@ -349,6 +384,17 @@ class SpotifyAIDJApp(ctk.CTk):
     def _update_player_bar(self, track: dict | None) -> None:
         if not hasattr(self, "_track_label"):
             return
+        # Refresh queue panel
+        def _fetch_queue():
+            items = self._spotify.get_queue()
+            self.after(0, lambda: self._update_queue_panel(items))
+        threading.Thread(target=_fetch_queue, daemon=True).start()
+        # Sync volume slider
+        def _fetch_vol():
+            vol = self._spotify.get_volume()
+            if vol >= 0:
+                self.after(0, lambda: self._vol_slider.set(vol))
+        threading.Thread(target=_fetch_vol, daemon=True).start()
         if track:
             self._track_label.configure(
                 text=f"{track['name']}  —  {track['artist']}",
@@ -358,6 +404,15 @@ class SpotifyAIDJApp(ctk.CTk):
         else:
             self._track_label.configure(text="Not playing", text_color="gray")
             self._like_button.configure(text="♡")
+
+    def _update_queue_panel(self, items: list) -> None:
+        if not hasattr(self, "_queue_box"):
+            return
+        self._queue_box.configure(state="normal")
+        self._queue_box.delete("0.0", "end")
+        for t in items:
+            self._queue_box.insert("end", f"{t['name']}  —  {t['artist']}\n")
+        self._queue_box.configure(state="disabled")
 
     def _start_player_poll(self) -> None:
         """Poll current track every 5 seconds to keep the bar in sync."""
@@ -413,11 +468,15 @@ class SpotifyAIDJApp(ctk.CTk):
 
             if is_continue:
                 from brain import get_continue_params
+                queue_tracks = self._spotify.get_queue()
+                if queue_tracks:
+                    self._log(f"Queue snapshot: {len(queue_tracks)} tracks — using for smarter continuation")
                 directives = get_continue_params(
                     self._spotify.last_request,
                     self._spotify.last_queries,
                     api_key,
                     local_only=local_only,
+                    queue_tracks=queue_tracks,
                 )
                 playlist_tracks = None
             elif playlist_url:

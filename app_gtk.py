@@ -220,6 +220,24 @@ def _build_css(c: dict) -> bytes:
         min-height: 1px;
         opacity: 0.5;
     }}
+    scale {{
+        min-width: 80px;
+    }}
+    scale trough {{
+        background-color: {c['overlay']};
+        border-radius: 4px;
+        min-height: 4px;
+    }}
+    scale highlight {{
+        background-color: {c['primary']};
+        border-radius: 4px;
+    }}
+    scale slider {{
+        background-color: {c['text']};
+        border-radius: 50%;
+        min-width: 14px;
+        min-height: 14px;
+    }}
     .status-dot-active {{
         color: {c['primary']};
         font-size: 10px;
@@ -492,20 +510,87 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         self._like_button.connect("clicked", lambda _: self._handle_like())
         controls.append(self._like_button)
 
+        # Volume slider
+        vol_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        vol_box.set_margin_start(8)
+
+        vol_icon = Gtk.Label(label=" ")
+        vol_icon.add_css_class("label-muted")
+        vol_box.append(vol_icon)
+
+        self._vol_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
+        self._vol_slider.set_value(50)
+        self._vol_slider.set_draw_value(False)
+        self._vol_slider.set_size_request(80, -1)
+        self._vol_slider.set_tooltip_text("Volume")
+        self._vol_slider_handler = self._vol_slider.connect("value-changed", self._on_volume_changed)
+        vol_box.append(self._vol_slider)
+
+        controls.append(vol_box)
         player_frame.append(controls)
         outer.append(player_frame)
 
-        # Separator + Activity log
+        # Separator
         sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         sep2.set_margin_top(4)
         sep2.set_margin_bottom(12)
         outer.append(sep2)
 
+        # Bottom pane: queue list (left) + activity log (right)
+        bottom_pane = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bottom_pane.set_vexpand(True)
+        outer.append(bottom_pane)
+
+        # -- Queue panel --
+        queue_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        queue_col.set_size_request(180, -1)
+
+        queue_label = Gtk.Label(label="UP NEXT")
+        queue_label.set_halign(Gtk.Align.START)
+        queue_label.add_css_class("input-label")
+        queue_label.set_margin_bottom(6)
+        queue_col.append(queue_label)
+
+        self._queue_store = Gtk.StringList()
+        self._queue_list  = Gtk.ListView()
+
+        factory = Gtk.SignalListItemFactory()
+        def _setup(f, item):
+            lbl = Gtk.Label()
+            lbl.set_halign(Gtk.Align.START)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(22)
+            lbl.add_css_class("label-muted")
+            item.set_child(lbl)
+        def _bind(f, item):
+            item.get_child().set_text(item.get_item().get_string())
+        factory.connect("setup", _setup)
+        factory.connect("bind",  _bind)
+
+        self._queue_list.set_factory(factory)
+        self._queue_list.set_model(Gtk.NoSelection.new(self._queue_store))
+        self._queue_list.add_css_class("log-view")
+
+        queue_scroll = Gtk.ScrolledWindow()
+        queue_scroll.set_vexpand(True)
+        queue_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        queue_scroll.set_child(self._queue_list)
+        queue_col.append(queue_scroll)
+        bottom_pane.append(queue_col)
+
+        # Vertical separator
+        vsep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        bottom_pane.append(vsep)
+
+        # -- Activity log --
+        log_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        log_col.set_hexpand(True)
+
         activity_label = Gtk.Label(label="ACTIVITY")
         activity_label.set_halign(Gtk.Align.START)
         activity_label.add_css_class("input-label")
         activity_label.set_margin_bottom(6)
-        outer.append(activity_label)
+        log_col.append(activity_label)
 
         self._log_buffer = Gtk.TextBuffer()
 
@@ -515,7 +600,6 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         log_view.add_css_class("log-view")
 
-        # Monospace font via buffer tag - modify_font() is GTK3 only
         self._log_mono_tag = self._log_buffer.create_tag(
             "monospace",
             font_desc=Pango.FontDescription.from_string("monospace 11"),
@@ -526,7 +610,8 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_child(log_view)
         self._log_scroll = scroll
-        outer.append(scroll)
+        log_col.append(scroll)
+        bottom_pane.append(log_col)
 
         self._stack.add_named(outer, "player")
         # Set initial learning dot state
@@ -559,6 +644,16 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
     # ------------------------------------------------------------------
     # Player bar controls
     # ------------------------------------------------------------------
+
+    def _on_volume_changed(self, slider) -> None:
+        """Debounced volume change — only fires Spotify API call when user stops dragging."""
+        vol = int(slider.get_value())
+        if hasattr(self, "_vol_timer_id"):
+            GLib.source_remove(self._vol_timer_id)
+        def _apply():
+            self._spotify.set_volume(vol)
+            return GLib.SOURCE_REMOVE
+        self._vol_timer_id = GLib.timeout_add(400, _apply)
 
     def _handle_like(self) -> None:
         def _work():
@@ -602,10 +697,28 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
             self._track_label.set_text(f"{track['name']}  —  {track['artist']}")
             self._track_label.remove_css_class("label-muted")
             self._like_button.set_label("♥" if track["is_liked"] else "♡")
+            # Sync volume slider without triggering the change handler
+            vol = self._spotify.get_volume()
+            if vol >= 0:
+                self._vol_slider.handler_block(self._vol_slider_handler)
+                self._vol_slider.set_value(vol)
+                self._vol_slider.handler_unblock(self._vol_slider_handler)
         else:
             self._track_label.set_text("Not playing")
             self._track_label.add_css_class("label-muted")
             self._like_button.set_label("♡")
+        # Refresh queue panel
+        def _fetch_queue():
+            items = self._spotify.get_queue()
+            GLib.idle_add(self._update_queue_panel, items)
+        threading.Thread(target=_fetch_queue, daemon=True).start()
+        return GLib.SOURCE_REMOVE
+
+    def _update_queue_panel(self, items: list) -> bool:
+        while self._queue_store.get_n_items():
+            self._queue_store.remove(0)
+        for t in items:
+            self._queue_store.append(f"{t['name']}  —  {t['artist']}")
         return GLib.SOURCE_REMOVE
 
     def _start_player_poll(self) -> None:
@@ -658,11 +771,15 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
 
             if is_continue:
                 from brain import get_continue_params
+                queue_tracks = self._spotify.get_queue()
+                if queue_tracks:
+                    self._log(f"Queue snapshot: {len(queue_tracks)} tracks — using for smarter continuation")
                 directives = get_continue_params(
                     self._spotify.last_request,
                     self._spotify.last_queries,
                     api_key,
                     local_only=local_only,
+                    queue_tracks=queue_tracks,
                 )
                 playlist_tracks = None
             elif playlist_url:

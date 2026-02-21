@@ -160,20 +160,6 @@ queries: [
 ]
 queue_size: 50
 
-Request: "classic 70s ethiopian jazz like mulatu astatke"
-reasoning: "Ethio-jazz is a specific scene centered on Addis Ababa in the 70s. Name the key artists directly."
-queries: [
-  "Mulatu Astatke",
-  "Tlahoun Gessesse",
-  "Mahmoud Ahmed",
-  "Ethio jazz",
-  "Hailu Mergia",
-  "Alèmayèhu Eshèté",
-  "Ethiopian groove 1970s",
-  "Kaifa Records Ethiopia"
-]
-queue_size: 35
-
 Request: "sad acoustic songs"
 reasoning: "Well-known sad acoustic artists first, then broaden to genre terms"
 queries: [
@@ -559,12 +545,27 @@ def get_continue_params(
     previous_queries: list[str],
     api_key: str,
     local_only: bool = False,
+    queue_tracks: list[dict] | None = None,
 ) -> DJDirectives:
-    """Generate fresh queries to extend an existing session."""
+    """
+    Generate fresh queries to extend an existing session.
+    queue_tracks: list of {name, artist} dicts from the current Spotify queue.
+    When provided, the AI uses the actual queued tracks to find better matches
+    rather than relying solely on the original request text.
+    """
     formatted_queries = "\n".join(f"  - {q}" for q in previous_queries)
+
+    if queue_tracks:
+        formatted_queue = "\n".join(
+            f"  - {t['name']} by {t['artist']}" for t in queue_tracks[:20]
+        )
+    else:
+        formatted_queue = "  (no queue data available — go by original request)"
+
     prompt = CONTINUE_PROMPT.format(
         user_prompt=original_prompt,
         previous_queries=formatted_queries,
+        queue_tracks=formatted_queue,
     )
     result = _call_ai(prompt, api_key, local_only=local_only)
     if result:

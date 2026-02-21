@@ -31,6 +31,8 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from config import get_spotify_cache_path
+from pathlib import Path as _Path
+_PLAYED_CACHE = _Path.home() / '.spotify-ai-dj' / 'played_uris.json'
 from preferences import load_preferences, record_like, record_skip, record_request, score_tracks, SkipDetector
 
 # ------------------------------------------------------------------
@@ -109,6 +111,29 @@ class PlayResult:
     queries_run: int = field(default=0)
 
 
+
+def _load_played_uris() -> set:
+    """Load persisted played URIs from disk (capped at last 500)."""
+    try:
+        if _PLAYED_CACHE.exists():
+            import json as _j
+            uris = _j.loads(_PLAYED_CACHE.read_text())
+            return set(uris[-500:])
+    except Exception:
+        pass
+    return set()
+
+
+def _save_played_uris(uris: set) -> None:
+    """Persist played URIs to disk, keeping last 500."""
+    try:
+        import json as _j
+        _PLAYED_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        _PLAYED_CACHE.write_text(_j.dumps(list(uris)[-500:]))
+    except Exception:
+        pass
+
+
 class SpotifyClient:
     """
     Wrapper around spotipy for authentication and playback.
@@ -120,7 +145,7 @@ class SpotifyClient:
         # Session state - persists between plays for continue functionality
         self.last_request:  str       = ""
         self.last_queries:  list[str] = []
-        self.played_uris:   set[str]  = set()
+        self.played_uris:   set[str]  = _load_played_uris()
         self._liked_ids:    set[str]  = set()   # local like state (API endpoint restricted)
         self.skip_detector: SkipDetector = SkipDetector(self)
         self._log_fn = print   # GUI can override: self._spotify._log_fn = self._log
@@ -449,6 +474,35 @@ class SpotifyClient:
 
         return unique[:target]
 
+
+    def get_queue(self) -> list[dict]:
+        """
+        Fetch the user's upcoming Spotify queue.
+        Returns a list of track dicts (name, artist, uri).
+        Limited to the next 20 tracks to keep it readable.
+        """
+        try:
+            token = self._get_token()
+            resp  = requests.get(
+                "https://api.spotify.com/v1/me/player/queue",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if not resp.ok:
+                return []
+            items = resp.json().get("queue", [])[:20]
+            return [
+                {
+                    "name":   t.get("name", ""),
+                    "artist": t["artists"][0]["name"] if t.get("artists") else "Unknown",
+                    "uri":    t.get("uri", ""),
+                }
+                for t in items
+            ]
+        except Exception as e:
+            print(f"[spotify] get_queue error: {e}")
+            return []
+
     def get_current_track(self) -> Optional[dict]:
         """
         Return info about the currently playing track, or None.
@@ -498,6 +552,31 @@ class SpotifyClient:
                 return True, f"Liked: {track['name']} - {track['artist']}"
         except Exception as e:
             return False, f"Could not update like: {e}"
+
+
+    def get_volume(self) -> int:
+        """Return current playback volume (0-100), or -1 on error."""
+        try:
+            state = self._get_client().current_playback()
+            if state and state.get("device"):
+                return state["device"].get("volume_percent", -1)
+        except Exception:
+            pass
+        return -1
+
+    def set_volume(self, percent: int) -> None:
+        """Set playback volume (0-100)."""
+        try:
+            percent = max(0, min(100, percent))
+            token   = self._get_token()
+            requests.put(
+                "https://api.spotify.com/v1/me/player/volume",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"volume_percent": str(percent)},
+                timeout=10,
+            )
+        except Exception as e:
+            print(f"[spotify] set_volume error: {e}")
 
     def skip_track(self) -> tuple[bool, str]:
         """Skip to the next track."""
