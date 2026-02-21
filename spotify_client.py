@@ -31,6 +31,7 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from config import get_spotify_cache_path
+from preferences import load_preferences, record_like, record_skip, record_request, score_tracks, SkipDetector
 
 # ------------------------------------------------------------------
 # Load credentials from .env file
@@ -121,6 +122,7 @@ class SpotifyClient:
         self.last_queries:  list[str] = []
         self.played_uris:   set[str]  = set()
         self._liked_ids:    set[str]  = set()   # local like state (API endpoint restricted)
+        self.skip_detector: SkipDetector = SkipDetector(self)
 
     def _get_client(self) -> spotipy.Spotify:
         if self._sp is None:
@@ -233,8 +235,14 @@ class SpotifyClient:
 
         print(f"[spotify] {len(unique)} unique tracks from {len(queries)} queries")
 
-        # Shuffle for variety then trim to target size
-        random.shuffle(unique)
+        # Score and rerank by taste profile (Option 2)
+        # Falls back to shuffle if no centroid exists yet
+        prefs = load_preferences()
+        if prefs.get("taste_centroid"):
+            unique = score_tracks(unique, prefs)
+        else:
+            random.shuffle(unique)
+
         return unique[:target]
 
     def get_current_track(self) -> Optional[dict]:
@@ -267,22 +275,40 @@ class SpotifyClient:
     def like_current_track(self) -> tuple[bool, str]:
         """
         Toggle like on the currently playing track. Returns (success, message).
-        Liked state is tracked locally since the Spotify contains endpoint
-        is restricted for new apps.
+        Uses the February 2026 /v1/me/library endpoint (replaced /v1/me/tracks)
+        which accepts Spotify URIs instead of IDs.
+        Liked state tracked locally since the contains endpoint is restricted.
         """
         track = self.get_current_track()
         if not track:
             return False, "Nothing is currently playing."
         try:
-            sp = self._get_client()
+            token   = self._get_token()
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            uri     = track.get("uri") or f"spotify:track:{track['id']}"
+            params  = {"uris": uri}
+
             if track["is_liked"]:
-                sp.current_user_saved_tracks_delete([track["id"]])
-                self._liked_ids.discard(track["id"])
-                return True, f"Unliked: {track['name']} - {track['artist']}"
+                resp = requests.delete(
+                    "https://api.spotify.com/v1/me/library",
+                    headers=headers, params=params, timeout=10,
+                )
+                if resp.ok:
+                    self._liked_ids.discard(track["id"])
+                    return True, f"Unliked: {track['name']} - {track['artist']}"
+                else:
+                    return False, f"Unlike failed: {resp.status_code} {resp.text[:100]}"
             else:
-                sp.current_user_saved_tracks_add([track["id"]])
-                self._liked_ids.add(track["id"])
-                return True, f"Liked: {track['name']} - {track['artist']}"
+                resp = requests.put(
+                    "https://api.spotify.com/v1/me/library",
+                    headers=headers, params=params, timeout=10,
+                )
+                if resp.ok:
+                    self._liked_ids.add(track["id"])
+                    record_like(track)   # update preference profile
+                    return True, f"Liked: {track['name']} - {track['artist']}"
+                else:
+                    return False, f"Like failed: {resp.status_code} {resp.text[:100]}"
         except Exception as e:
             return False, f"Could not update like: {e}"
 
@@ -473,13 +499,17 @@ class SpotifyClient:
             if uri:
                 self.played_uris.add(uri)
 
+        record_request(
+            getattr(directives, "_raw_request", ""),
+            success=True,
+        )
         return PlayResult(
             success=True,
             message="Playback started.",
             first_track=label,
             track_count=len(tracks),
             queries_run=len(queries),
-        ) 
+        )
 
 # if i get one more http 400 i will actually fucking crash out dude 20:20 feb 18
 # oh the issue was I was making the API call wrong... whoops, works fine now, still collects only 10 raw tracks per request 20:26

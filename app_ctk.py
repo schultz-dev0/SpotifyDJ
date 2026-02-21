@@ -19,6 +19,7 @@ import customtkinter as ctk
 
 from brain import get_vibe_params, get_playlist_vibe_params
 from config import is_configured, load_config, save_config, load_env_llm_config, save_env_llm_config
+from preferences import load_preferences
 from spotify_client import SpotifyClient
 
 ctk.set_appearance_mode("dark")
@@ -464,8 +465,9 @@ class SpotifyAIDJApp(ctk.CTk):
         self._log(message, success=success)
         self._set_busy(False)
         if success:
-            # Refresh player bar after a short delay to let Spotify catch up
             self.after(1200, self._refresh_player_bar)
+            # Start skip detector — detects skips within 20s as dislike signals
+            self._spotify.skip_detector.start()
 
     def _set_busy(self, busy: bool) -> None:
         """Disable or re-enable input controls during a request."""
@@ -486,7 +488,7 @@ class SpotifyAIDJApp(ctk.CTk):
 
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("480x520")
+        dialog.geometry("480x560")
         dialog.resizable(False, False)
         dialog.grab_set()
 
@@ -524,21 +526,31 @@ class SpotifyAIDJApp(ctk.CTk):
         _label("Model")
         model_entry = _entry(llm_cfg["model"],     "llama3.2:latest")
 
-        # ---- Local only toggle ----
+        # ---- Toggles ----
         ctk.CTkLabel(frame, text="", height=4).pack()  # spacer
-        toggle_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        toggle_frame.pack(fill="x", pady=(4, 8))
 
-        local_only_var = ctk.BooleanVar(value=self._config.get("local_ai_only", False))
+        def _toggle_row(label: str, var_val: bool):
+            f = ctk.CTkFrame(frame, fg_color="transparent")
+            f.pack(fill="x", pady=(2, 2))
+            v = ctk.BooleanVar(value=var_val)
+            ctk.CTkLabel(f, text=label, font=("Helvetica", 12), anchor="w").pack(side="left", fill="x", expand=True)
+            ctk.CTkSwitch(f, text="", variable=v, width=46).pack(side="right")
+            return v
+
+        local_only_var  = _toggle_row("Use local AI only  (skip Gemini entirely)",
+                                       self._config.get("local_ai_only", False))
+        learning_var    = _toggle_row("Enable preference learning  (likes, skips, taste profile)",
+                                       self._config.get("learning_enabled", True))
+
+        prefs = load_preferences()
+        n_liked   = len(prefs.get("liked_tracks", []))
+        n_skipped = len(prefs.get("skipped_tracks", []))
+        has_vec   = prefs.get("taste_centroid") is not None
         ctk.CTkLabel(
-            toggle_frame,
-            text="Use local AI only  (skip Gemini entirely)",
-            font=("Helvetica", 12),
-            anchor="w",
-        ).pack(side="left", fill="x", expand=True)
-        ctk.CTkSwitch(
-            toggle_frame, text="", variable=local_only_var, width=46
-        ).pack(side="right")
+            frame,
+            text=f"Profile: {n_liked} liked · {n_skipped} skipped · embedding {'ready' if has_vec else 'building...'}",
+            font=("Helvetica", 11), text_color="gray", anchor="w"
+        ).pack(fill="x", pady=(0, 6))
 
         # ---- Error + buttons ----
         error_label = ctk.CTkLabel(frame, text="", text_color="red", anchor="w")
@@ -550,16 +562,18 @@ class SpotifyAIDJApp(ctk.CTk):
             if not using_local_only and not new_gemini:
                 error_label.configure(text="Gemini API key required (or enable local-only mode).")
                 return
-            self._config["gemini_api_key"] = new_gemini
-            self._config["local_ai_only"]  = using_local_only
+            self._config["gemini_api_key"]   = new_gemini
+            self._config["local_ai_only"]    = using_local_only
+            self._config["learning_enabled"] = learning_var.get()
             save_config(self._config)
             save_env_llm_config(
                 base_url = url_entry.get().strip(),
                 api_key  = key_entry.get().strip(),
                 model    = model_entry.get().strip() or "llama3.2:latest",
             )
-            mode = "local-only" if using_local_only else "Gemini + local fallback"
-            self._log(f"Settings saved. AI mode: {mode}")
+            mode     = "local-only" if using_local_only else "Gemini + local fallback"
+            learning = "on" if learning_var.get() else "off"
+            self._log(f"Settings saved. AI mode: {mode} | Learning: {learning}")
             dialog.destroy()
 
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")

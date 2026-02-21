@@ -31,6 +31,7 @@ from gi.repository import Gtk, Gdk, GLib, Pango
 
 from brain import get_vibe_params, get_playlist_vibe_params
 from config import is_configured, load_config, save_config, load_env_llm_config, save_env_llm_config
+from preferences import load_preferences
 from spotify_client import SpotifyClient
 
 APP_TITLE = "Spotify AI DJ"
@@ -213,6 +214,25 @@ def _build_css(c: dict) -> bytes:
         padding: 12px 14px;
         font-family: monospace;
         font-size: 12px;
+    }}
+    separator {{
+        background-color: {c['overlay']};
+        min-height: 1px;
+        opacity: 0.5;
+    }}
+    .status-dot-active {{
+        color: {c['primary']};
+        font-size: 10px;
+    }}
+    .status-dot-idle {{
+        color: {c['muted']};
+        font-size: 10px;
+    }}
+    .input-label {{
+        font-size: 11px;
+        font-weight: bold;
+        color: {c['subtext']};
+        letter-spacing: 1px;
     }}
     """
     return css.encode("utf-8")
@@ -401,8 +421,9 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         outer.append(top_bar)
 
         # Request input
-        input_label = Gtk.Label(label="What do you want to hear?")
+        input_label = Gtk.Label(label="WHAT DO YOU WANT TO HEAR?")
         input_label.set_halign(Gtk.Align.START)
+        input_label.add_css_class("input-label")
         input_label.set_margin_bottom(6)
         outer.append(input_label)
 
@@ -428,18 +449,31 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
 
         outer.append(btn_row)
 
+        # Separator
+        sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep1.set_margin_bottom(16)
+        outer.append(sep1)
+
         # Player bar
         player_frame = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         player_frame.add_css_class("player-bar")
         player_frame.set_margin_bottom(16)
+
+        track_info = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        track_info.set_hexpand(True)
+
+        self._learning_dot = Gtk.Label(label="●")
+        self._learning_dot.set_valign(Gtk.Align.CENTER)
+        track_info.append(self._learning_dot)
 
         self._track_label = Gtk.Label(label="Not playing")
         self._track_label.add_css_class("label-muted")
         self._track_label.set_halign(Gtk.Align.START)
         self._track_label.set_hexpand(True)
         self._track_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._track_label.set_max_width_chars(40)
-        player_frame.append(self._track_label)
+        self._track_label.set_max_width_chars(38)
+        track_info.append(self._track_label)
+        player_frame.append(track_info)
 
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
@@ -461,12 +495,16 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         player_frame.append(controls)
         outer.append(player_frame)
 
-        # Activity log
-        activity_label = Gtk.Label(label="Activity")
+        # Separator + Activity log
+        sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        sep2.set_margin_top(4)
+        sep2.set_margin_bottom(12)
+        outer.append(sep2)
+
+        activity_label = Gtk.Label(label="ACTIVITY")
         activity_label.set_halign(Gtk.Align.START)
-        activity_label.add_css_class("label-muted")
+        activity_label.add_css_class("input-label")
         activity_label.set_margin_bottom(6)
-        activity_label.set_margin_top(4)
         outer.append(activity_label)
 
         self._log_buffer = Gtk.TextBuffer()
@@ -491,6 +529,9 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         outer.append(scroll)
 
         self._stack.add_named(outer, "player")
+        # Set initial learning dot state
+        self._learning_dot.add_css_class("status-dot-active")
+        self._learning_dot.set_tooltip_text("Preference learning: ON")
         self._log("Ready. Enter a request and press Play.")
         # Pre-authenticate on the main thread so worker threads never need
         # to trigger the OAuth browser flow (which deadlocks in GTK).
@@ -658,6 +699,8 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         self._set_busy(False)
         if success:
             GLib.timeout_add(1200, self._refresh_player_bar)
+            # Start skip detector — detects skips within 20s as dislike signals
+            self._spotify.skip_detector.start()
         return GLib.SOURCE_REMOVE
 
     def _set_busy(self, busy: bool) -> None:
@@ -677,7 +720,7 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         dialog = Gtk.Window(title="Settings")
         dialog.set_transient_for(self)
         dialog.set_modal(True)
-        dialog.set_default_size(460, 490)
+        dialog.set_default_size(460, 540)
         dialog.set_resizable(False)
 
         frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -730,22 +773,47 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         key_entry   = _field("API Key",   llm_cfg["api_key"],   "sk-... or leave blank for Ollama")
         model_entry = _field("Model",     llm_cfg["model"],     "llama3.2:latest")
 
-        # ---- Local only toggle ----
-        toggle_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        toggle_row.set_margin_top(8)
-        toggle_row.set_margin_bottom(16)
+        # ---- Toggles ----
+        def _toggle_row(label_text: str, active: bool) -> Gtk.Switch:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.set_margin_top(6)
+            row.set_margin_bottom(6)
+            lbl = Gtk.Label(label=label_text)
+            lbl.set_halign(Gtk.Align.START)
+            lbl.set_hexpand(True)
+            sw = Gtk.Switch()
+            sw.set_active(active)
+            sw.set_valign(Gtk.Align.CENTER)
+            row.append(lbl)
+            row.append(sw)
+            frame.append(row)
+            return sw
 
-        local_only_switch = Gtk.Switch()
-        local_only_switch.set_active(self._config.get("local_ai_only", False))
-        local_only_switch.set_valign(Gtk.Align.CENTER)
+        toggle_sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        toggle_sep.set_margin_top(8)
+        toggle_sep.set_margin_bottom(8)
+        frame.append(toggle_sep)
 
-        toggle_label = Gtk.Label(label="Use local AI only  (skip Gemini entirely)")
-        toggle_label.set_halign(Gtk.Align.START)
-        toggle_label.set_hexpand(True)
+        local_only_switch  = _toggle_row(
+            "Use local AI only  (skip Gemini entirely)",
+            self._config.get("local_ai_only", False)
+        )
+        learning_switch = _toggle_row(
+            "Enable preference learning  (likes, skips, taste profile)",
+            self._config.get("learning_enabled", True)
+        )
 
-        toggle_row.append(toggle_label)
-        toggle_row.append(local_only_switch)
-        frame.append(toggle_row)
+        prefs = load_preferences()
+        n_liked    = len(prefs.get("liked_tracks", []))
+        n_skipped  = len(prefs.get("skipped_tracks", []))
+        has_vector = prefs.get("taste_centroid") is not None
+        pref_hint  = Gtk.Label(
+            label=f"Profile: {n_liked} liked · {n_skipped} skipped · embedding {'ready' if has_vector else 'building...'}"
+        )
+        pref_hint.add_css_class("label-muted")
+        pref_hint.set_halign(Gtk.Align.START)
+        pref_hint.set_margin_bottom(8)
+        frame.append(pref_hint)
 
         # ---- Error / buttons ----
         error_label = Gtk.Label(label="")
@@ -766,8 +834,9 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
                 error_label.set_text("Gemini API key required (or enable local-only mode).")
                 return
 
-            self._config["gemini_api_key"] = new_gemini
-            self._config["local_ai_only"]  = using_local_only
+            self._config["gemini_api_key"]   = new_gemini
+            self._config["local_ai_only"]    = using_local_only
+            self._config["learning_enabled"] = learning_switch.get_active()
             save_config(self._config)
 
             save_env_llm_config(
@@ -775,8 +844,9 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
                 api_key  = key_entry.get_text().strip(),
                 model    = model_entry.get_text().strip() or "llama3.2:latest",
             )
-            mode = "local-only" if using_local_only else "Gemini + local fallback"
-            self._log(f"Settings saved. AI mode: {mode}")
+            mode     = "local-only" if using_local_only else "Gemini + local fallback"
+            learning = "on" if learning_switch.get_active() else "off"
+            self._log(f"Settings saved. AI mode: {mode} | Learning: {learning}")
             dialog.close()
 
         save_btn = Gtk.Button(label="Save")

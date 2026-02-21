@@ -19,8 +19,9 @@ SPOTIFY_CACHE_FILE = CONFIG_DIR / ".spotify_cache"
 ENV_FILE           = Path(__file__).parent / ".env"
 
 DEFAULT_CONFIG: dict = {
-    "gemini_api_key": "",
-    "local_ai_only":  False,   # when True, skip Gemini and use local LLM only
+    "gemini_api_key":    "",
+    "local_ai_only":     False,  # when True, skip Gemini and use local LLM only
+    "learning_enabled":  True,   # when False, disable preference recording and scoring
 }
 
 

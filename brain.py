@@ -23,6 +23,8 @@ Two public functions:
 
 from __future__ import annotations
 
+from preferences import build_preference_context, load_preferences
+
 import json
 import os
 from pathlib import Path
@@ -108,12 +110,17 @@ CRITICAL RULES FOR GOOD QUERIES:
 5. QUANTITY: Generate 6-10 queries. For niche genres, use more queries
    since individual searches may return fewer results.
 
+6. REQUEST ALWAYS WINS. If the user asks for jazz, play jazz — even if their
+   history is all metal. The listener history below is only a tiebreaker for
+   vague requests. Never let it override an explicit genre, artist, or mood.
+
 QUEUE SIZE:
   - Casual listen:      20-30 tracks
   - Background/work:    40-60 tracks
   - Gym/long session:   70-100 tracks
   Default 40 if unclear.
 
+{preference_context}
 ---
 EXAMPLES:
 
@@ -477,7 +484,12 @@ def get_playlist_vibe_params(
 
 def get_vibe_params(user_prompt: str, api_key: str, local_only: bool = False) -> DJDirectives:
     """Convert a fresh music request into search queries."""
-    prompt = INITIAL_PROMPT.format(user_prompt=user_prompt)
+    prefs   = load_preferences()
+    pref_ctx = build_preference_context(prefs)
+    prompt  = INITIAL_PROMPT.format(
+        user_prompt=user_prompt,
+        preference_context=pref_ctx,
+    )
     result = _call_ai(prompt, api_key, local_only=local_only)
     if result:
         return result

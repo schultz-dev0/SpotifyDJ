@@ -18,3 +18,6 @@ dist/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Testing
+test_dj.py
