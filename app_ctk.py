@@ -291,6 +291,10 @@ class SpotifyAIDJApp(ctk.CTk):
         def _preauth():
             try:
                 self._spotify._get_client()
+                # Start skip detector globally at launch so external skips
+                # (media keys, Hyprland keybinds, other apps) are also recorded.
+                self._spotify.skip_detector.start()
+                print("[skip_detector] Global skip monitoring active")
             except Exception as e:
                 print(f"[auth] pre-auth failed: {e}")
             self._start_player_poll()

@@ -114,6 +114,28 @@ CRITICAL RULES FOR GOOD QUERIES:
    history is all metal. The listener history below is only a tiebreaker for
    vague requests. Never let it override an explicit genre, artist, or mood.
 
+7. SOUNDTRACKS, SCORES & GAME OSTs — this is critical:
+   NEVER search for a film/game title as a standalone query. "Destiny" returns
+   songs NAMED Destiny, not the game. "Interstellar" returns a country singer.
+
+   USE SPOTIFY FIELD OPERATORS for precision. These filter by exact field:
+     artist:"Martin O'Donnell"              — only tracks by this artist
+     album:"Destiny Original Soundtrack"    — only tracks from this album
+     artist:"Hans Zimmer" album:"Inception" — both filters at once
+   Always prefer field operator queries over plain keyword queries for OSTs.
+
+   Also use plain queries as backup:
+   - Composer name alone: "Martin O'Donnell", "Mick Gordon"
+   - Composer + property: "Mick Gordon Doom"
+
+   Know your composers. Common ones:
+     Video games: Martin O'Donnell (Halo/Destiny), Mick Gordon (Doom/Wolfenstein),
+       Nobuo Uematsu (Final Fantasy), Koji Kondo (Mario/Zelda), Jesper Kyd (Assassin's Creed),
+       Gustavo Santaolalla (The Last of Us), Bear McCreary (God of War),
+       Yoko Shimomura (Kingdom Hearts), Disasterpeace (Celeste/Hyper Light Drifter)
+     Film: Hans Zimmer, John Williams, Ennio Morricone, Howard Shore, Bernard Herrmann
+     TV: Ramin Djawadi (Game of Thrones), Jeff Russo, Nathan Johnson
+
 QUEUE SIZE:
   - Casual listen:      20-30 tracks
   - Background/work:    40-60 tracks
@@ -137,22 +159,6 @@ queries: [
   "Oomph! metal"
 ]
 queue_size: 50
-
-Request: "russian military propaganda songs like Вставай донбасс"
-reasoning: "This is Russian patriotic/military music. Search in Cyrillic for best results, add transliterated and English variants, and name real ensembles and artists in this genre."
-queries: [
-  "Ансамбль Александрова",
-  "Любэ",
-  "военные песни",
-  "советские патриотические песни",
-  "Alexandrov Ensemble",
-  "Lyube русский рок",
-  "Донбасс песни",
-  "русские военные марши",
-  "Soviet military march",
-  "Время вперёд оркестр"
-]
-queue_size: 40
 
 Request: "classic 70s ethiopian jazz like mulatu astatke"
 reasoning: "Ethio-jazz is a specific scene centered on Addis Ababa in the 70s. Name the key artists directly."
@@ -181,6 +187,52 @@ queries: [
 ]
 queue_size: 30
 
+--- OST / SOUNDTRACK MODE ---
+For any request involving game soundtracks, film scores, or TV scores:
+  - Set search_mode to "album"
+  - Your queries are ALBUM TITLES, not track searches
+  - The app will search for these albums on Spotify and pull all their tracks directly
+  - This bypasses keyword matching entirely and guarantees correct results
+  - Name every relevant album separately — expansions, volumes, special editions
+  - Also include the composer name as a standalone query (finds any loose tracks/singles)
+  - Do NOT use field operators in album mode — just the plain album title
+
+Request: "play the soundtrack from destiny 1 and 2"
+reasoning: "OST request — use album mode. Destiny 1 composer: Martin O'Donnell & Michael Salvatori. Destiny 2 has multiple expansion OSTs each released as separate albums. Searching album titles directly guarantees we get the actual soundtrack tracks."
+queries: [
+  "Destiny Original Soundtrack",
+  "Destiny 2 Original Soundtrack",
+  "Destiny 2 Forsaken Original Soundtrack",
+  "Destiny 2 Shadowkeep Original Soundtrack",
+  "Destiny 2 Beyond Light Original Soundtrack",
+  "Destiny 2 The Witch Queen Original Soundtrack",
+  "Destiny 2 Lightfall Original Soundtrack",
+  "Martin O'Donnell Michael Salvatori"
+]
+queue_size: 60
+search_mode: "album"
+
+Request: "Hans Zimmer Interstellar and Inception"
+reasoning: "OST request — album mode. Both are major film scores with dedicated soundtrack albums on Spotify."
+queries: [
+  "Interstellar Original Motion Picture Soundtrack",
+  "Inception Original Motion Picture Soundtrack",
+  "Hans Zimmer"
+]
+queue_size: 50
+search_mode: "album"
+
+Request: "final fantasy 7 remake ost"
+reasoning: "OST request — album mode. FF7 Remake has multiple soundtrack volumes. Nobuo Uematsu composed the original; Masashi Hamauzu and others did the remake."
+queries: [
+  "Final Fantasy VII Remake Original Soundtrack",
+  "Final Fantasy VII Remake Intergrade Original Soundtrack",
+  "Final Fantasy VII Original Soundtrack",
+  "Nobuo Uematsu Final Fantasy VII"
+]
+queue_size: 55
+search_mode: "album"
+
 Request: "japanese city pop 80s"
 reasoning: "City pop is a defined Japanese genre with known artists — use both Japanese script and romanized names"
 queries: [
@@ -199,9 +251,10 @@ queue_size: 45
 ---
 Output JSON only. No markdown, no explanation outside the JSON.
 The JSON must have exactly these fields:
-  "reasoning": string (explain what genre/scene you identified and your strategy)
-  "queries": array of strings
-  "queue_size": integer
+  "reasoning":   string  (explain what genre/scene you identified and your strategy)
+  "queries":     array of strings
+  "queue_size":  integer
+  "search_mode": string  ("track" for normal requests, "album" for OSTs/soundtracks/scores)
 """
 
 CONTINUE_PROMPT = """
@@ -254,9 +307,10 @@ STOPWORDS = {
 
 class DJDirectives(BaseModel):
     """Structured output returned by the AI model."""
-    reasoning:  str
-    queries:    list[str] = Field(default_factory=list)
-    queue_size: int = 40
+    reasoning:   str
+    queries:     list[str] = Field(default_factory=list)
+    queue_size:  int = 40
+    search_mode: str = "track"   # "track" (default) or "album" (for OSTs/scores)
 
 
 def _keyword_fallback(user_prompt: str) -> DJDirectives:

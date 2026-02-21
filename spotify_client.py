@@ -123,6 +123,7 @@ class SpotifyClient:
         self.played_uris:   set[str]  = set()
         self._liked_ids:    set[str]  = set()   # local like state (API endpoint restricted)
         self.skip_detector: SkipDetector = SkipDetector(self)
+        self._log_fn = print   # GUI can override: self._spotify._log_fn = self._log
 
     def _get_client(self) -> spotipy.Spotify:
         if self._sp is None:
@@ -138,6 +139,103 @@ class SpotifyClient:
             )
             self._sp = spotipy.Spotify(auth_manager=auth)
         return self._sp
+
+
+    def ensure_spotify_open(self) -> bool:
+        """
+        If no Spotify device is found, attempt to launch Spotify and wait
+        for it to appear. Returns True if a device is available afterwards.
+
+        Tries platform-appropriate launch commands. Waits up to 15 seconds
+        for Spotify to register with the API before giving up.
+        """
+        if self._find_device_id():
+            return True   # already open
+
+        import subprocess, sys, time
+
+        print("[spotify] No device found — attempting to launch Spotify...")
+
+        # Platform launch commands, tried in order
+        launch_commands = []
+        if sys.platform.startswith("linux"):
+            launch_commands = [
+                ["spotify"],                         # native install / PATH
+                ["flatpak", "run", "com.spotify.Client"],  # Flatpak (most common on modern distros)
+                ["snap", "run", "spotify"],          # Snap
+            ]
+        elif sys.platform == "darwin":
+            launch_commands = [
+                ["open", "-a", "Spotify"],
+            ]
+        elif sys.platform == "win32":
+            import os
+            spotify_exe = os.path.expandvars(
+                r"%APPDATA%\Spotify\Spotify.exe"
+            )
+            launch_commands = [[spotify_exe]]
+
+        launched = False
+        for cmd in launch_commands:
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                launched = True
+                print(f"[spotify] Launched via: {' '.join(cmd)}")
+                break
+            except (FileNotFoundError, OSError):
+                continue
+
+        if not launched:
+            print("[spotify] Could not find Spotify executable — install Spotify or open it manually")
+            return False
+
+        # Poll for up to 15 seconds for a device to appear
+        for i in range(15):
+            time.sleep(1)
+            if self._find_device_id():
+                print(f"[spotify] Device ready after {i+1}s")
+                return True
+
+        print("[spotify] Spotify launched but no device registered within 15s")
+        return False
+
+    def ensure_local_llm_warm(self) -> None:
+        """
+        If a local LLM is configured, wake it up with a minimal prompt so the
+        model is loaded into memory before the user's first real request.
+
+        Ollama lazy-loads models on first use which causes a 5-30 second stall.
+        Sending a tiny warmup prompt at app start hides that latency entirely.
+        Runs in a background thread so it never blocks the UI.
+        """
+        import threading
+
+        def _warm():
+            try:
+                from brain import LOCAL_LLM_BASE_URL, LOCAL_LLM_API_KEY, LOCAL_LLM_MODEL
+                if not LOCAL_LLM_BASE_URL:
+                    return   # no local LLM configured
+
+                import openai
+                print(f"[llm] Warming up {LOCAL_LLM_MODEL}...")
+                client = openai.OpenAI(
+                    base_url=LOCAL_LLM_BASE_URL.rstrip("/") + "/v1",
+                    api_key=LOCAL_LLM_API_KEY or "ollama",
+                )
+                client.chat.completions.create(
+                    model=LOCAL_LLM_MODEL,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=1,
+                )
+                print(f"[llm] {LOCAL_LLM_MODEL} is warm")
+            except Exception as e:
+                print(f"[llm] Warmup failed (non-fatal): {e}")
+
+        threading.Thread(target=_warm, daemon=True).start()
 
     def _find_device_id(self) -> Optional[str]:
         devices = self._get_client().devices().get("devices", [])
@@ -209,6 +307,112 @@ class SpotifyClient:
             print(f"[spotify] search failed for '{query}': {e}")
             return []
 
+
+    def _search_albums(self, query: str) -> list[dict]:
+        """
+        Search for albums matching a query string.
+        Returns a list of album dicts with id, name, artists.
+        Used for OST/soundtrack mode.
+        """
+        try:
+            token = self._get_token()
+            resp  = requests.get(
+                "https://api.spotify.com/v1/search",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": query, "type": "album", "limit": "5"},
+                timeout=10,
+            )
+            if not resp.ok:
+                print(f"[spotify] album search failed for '{query}': {resp.status_code}")
+                return []
+            items = resp.json().get("albums", {}).get("items", [])
+            print(f"[spotify] album search '{query}' -> {len(items)} albums")
+            return items
+        except Exception as e:
+            print(f"[spotify] album search error for '{query}': {e}")
+            return []
+
+    def _fetch_album_tracks(self, album_id: str) -> list[dict]:
+        """
+        Fetch all tracks from an album by its Spotify album ID.
+        Returns tracks in the same format as _search_page() so the
+        rest of the pipeline handles them identically.
+        """
+        try:
+            token  = self._get_token()
+            tracks = []
+            url    = f"https://api.spotify.com/v1/albums/{album_id}/tracks"
+            while url:
+                resp = requests.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"limit": "50"},
+                    timeout=10,
+                )
+                if not resp.ok:
+                    break
+                data  = resp.json()
+                items = data.get("items", [])
+                for item in items:
+                    # Normalise to the same shape as track-search results
+                    item["album"] = {"id": album_id}
+                tracks.extend(items)
+                url = data.get("next")
+            return tracks
+        except Exception as e:
+            print(f"[spotify] album track fetch error: {e}")
+            return []
+
+    def _build_album_pool(self, queries: list[str], target: int) -> list[dict]:
+        """
+        OST/soundtrack mode search pipeline.
+
+        For each query:
+          1. Search Spotify for albums matching the query
+          2. Take the top result (most relevant album)
+          3. Fetch every track from that album
+
+        Deduplicates by URI across all albums, then shuffles.
+        Much more precise than track search for soundtracks because album
+        search uses richer metadata (genre, label, description) to
+        disambiguate "Destiny Original Soundtrack" from songs called Destiny.
+        """
+        all_tracks: list[dict] = []
+        seen_album_ids: set[str] = set()
+        seen_uris:      set[str] = set()
+
+        for query in queries:
+            albums = self._search_albums(query)
+            if not albums:
+                # Fall back to track search for this query (e.g. composer name)
+                for track in self._run_single_search(query):
+                    uri = track.get("uri", "")
+                    if uri and uri not in seen_uris:
+                        seen_uris.add(uri)
+                        all_tracks.append(track)
+                continue
+
+            # Take top album result, skip if already fetched
+            album    = albums[0]
+            album_id = album.get("id", "")
+            if not album_id or album_id in seen_album_ids:
+                continue
+
+            seen_album_ids.add(album_id)
+            album_name = album.get("name", "")
+            print(f"[spotify] OST album: '{album_name}' ({album_id})")
+
+            tracks = self._fetch_album_tracks(album_id)
+            for track in tracks:
+                uri = track.get("uri", "")
+                if uri and uri not in seen_uris:
+                    seen_uris.add(uri)
+                    all_tracks.append(track)
+
+        print(f"[spotify] OST pool: {len(all_tracks)} tracks from {len(seen_album_ids)} albums")
+        random.shuffle(all_tracks)
+        return all_tracks[:target]
+
     def _build_track_pool(self, queries: list[str], target: int) -> list[dict]:
         """
         Run all queries sequentially, deduplicate by URI, and shuffle.
@@ -275,40 +479,23 @@ class SpotifyClient:
     def like_current_track(self) -> tuple[bool, str]:
         """
         Toggle like on the currently playing track. Returns (success, message).
-        Uses the February 2026 /v1/me/library endpoint (replaced /v1/me/tracks)
-        which accepts Spotify URIs instead of IDs.
-        Liked state tracked locally since the contains endpoint is restricted.
+        Liked state is tracked locally since the Spotify contains endpoint
+        is restricted for new apps.
         """
         track = self.get_current_track()
         if not track:
             return False, "Nothing is currently playing."
         try:
-            token   = self._get_token()
-            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            uri     = track.get("uri") or f"spotify:track:{track['id']}"
-            params  = {"uris": uri}
-
+            sp = self._get_client()
             if track["is_liked"]:
-                resp = requests.delete(
-                    "https://api.spotify.com/v1/me/library",
-                    headers=headers, params=params, timeout=10,
-                )
-                if resp.ok:
-                    self._liked_ids.discard(track["id"])
-                    return True, f"Unliked: {track['name']} - {track['artist']}"
-                else:
-                    return False, f"Unlike failed: {resp.status_code} {resp.text[:100]}"
+                sp.current_user_saved_tracks_delete([track["id"]])
+                self._liked_ids.discard(track["id"])
+                return True, f"Unliked: {track['name']} - {track['artist']}"
             else:
-                resp = requests.put(
-                    "https://api.spotify.com/v1/me/library",
-                    headers=headers, params=params, timeout=10,
-                )
-                if resp.ok:
-                    self._liked_ids.add(track["id"])
-                    record_like(track)   # update preference profile
-                    return True, f"Liked: {track['name']} - {track['artist']}"
-                else:
-                    return False, f"Like failed: {resp.status_code} {resp.text[:100]}"
+                sp.current_user_saved_tracks_add([track["id"]])
+                self._liked_ids.add(track["id"])
+                record_like(track)   # update preference profile
+                return True, f"Liked: {track['name']} - {track['artist']}"
         except Exception as e:
             return False, f"Could not update like: {e}"
 
@@ -409,9 +596,12 @@ class SpotifyClient:
 
         device_id = self._find_device_id()
         if not device_id:
+            if self.ensure_spotify_open():
+                device_id = self._find_device_id()
+        if not device_id:
             return PlayResult(
                 success=False,
-                message="No Spotify device found. Open Spotify on any device first.",
+                message="No Spotify device found. Tried to launch Spotify but no device appeared.",
             )
 
         uris   = [t["uri"] for t in mixed]
@@ -450,27 +640,37 @@ class SpotifyClient:
         except Exception as e:
             return PlayResult(success=False, message=f"Authentication failed: {e}")
 
-        # Find a playback device
+        # Find a playback device — launch Spotify if not running
         device_id = self._find_device_id()
+        if not device_id:
+            self._log_fn("[spotify] No device — attempting to launch Spotify...")
+            if self.ensure_spotify_open():
+                device_id = self._find_device_id()
         if not device_id:
             return PlayResult(
                 success=False,
-                message="No Spotify device found. Open Spotify on any device first.",
+                message="No Spotify device found. Tried to launch Spotify but no device appeared.",
             )
 
         # Unpack directives
         if hasattr(directives, "queries"):
-            queries    = directives.queries
-            queue_size = max(1, min(100, directives.queue_size))
+            queries     = directives.queries
+            queue_size  = max(1, min(100, directives.queue_size))
+            search_mode = getattr(directives, "search_mode", "track")
         else:
-            queries    = [str(directives)]
-            queue_size = 50
+            queries     = [str(directives)]
+            queue_size  = 50
+            search_mode = "track"
 
         if not queries:
             return PlayResult(success=False, message="No search queries were generated.")
 
-        # Build the track pool, then filter out anything already played
-        tracks = self._build_track_pool(queries, target=queue_size * 2)  # fetch extra to absorb filtering
+        # Build the track pool — route to album pipeline for OST requests
+        if search_mode == "album":
+            print(f"[spotify] OST mode — searching albums")
+            tracks = self._build_album_pool(queries, target=queue_size * 2)
+        else:
+            tracks = self._build_track_pool(queries, target=queue_size * 2)  # fetch extra to absorb filtering
         tracks = [t for t in tracks if t.get("uri") not in self.played_uris]
         tracks = tracks[:queue_size]
 

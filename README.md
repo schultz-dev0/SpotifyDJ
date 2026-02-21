@@ -18,10 +18,11 @@ It started as a super small project, but I liked it so much that I made it into 
 
 ### Features
 * **Smart Requests:** Just type "Play lofi music" or "something fast for coding." 
-* **Playlist Intelligence:** Link a playlist and it can intelligently queue up similar music.
+* **Playlist support:** Link a playlist and it can intelligently queue up similar music.
 * **Model support:** Use a Local LLM or Google Gemini via API.
 * **Toggle Control:** Switch between Local LLM or Cloud easily.
 * **Playback Control:** Basic media controls (play, pause, like songs).
+* **Preferenece engine** Learns your preferences in music over time from likes and skips (inside of the app).
 
 ---
 
@@ -30,6 +31,7 @@ It started as a super small project, but I liked it so much that I made it into 
 * **Spotify Premium** (Required for playback control via API).
 * **Gemini API Key** from [Google AI Studio](https://aistudio.google.com).
     * *Note: It takes a few seconds to make and is free!! (a good thing).*
+* **Or: Ollama running locally** no API key needed, fully private, works offline.
 
 ---
 
@@ -103,13 +105,20 @@ python main.py "dark techno"
 ```
 ---
 
-### First-time key setup from terminal
+## Setting Up a Local LLM (optional)
 
-Skip the GUI setup screen entirely by setting your key on the command line:
+If you want to use a local model instead of Gemini you can:
+
+1. Install Ollama and pull a model
 
 ```bash
-dj --set-key YOUR_GEMINI_API_KEY
+ollama pull llama3.2
 ```
+
+2. Open the settings panel in the app and fill in:
+    * **Base URL**: `http://localhost:11434`
+    * **API Key**: leave blank
+    * **Model**: `llama3.2:latest`
 
 ---
 

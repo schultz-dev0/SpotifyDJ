@@ -539,6 +539,13 @@ class SpotifyAIDJWindow(Gtk.ApplicationWindow):
         def _preauth():
             try:
                 self._spotify._get_client()
+                # Route spotify_client log messages to the activity log
+                self._spotify._log_fn = self._log
+                # Warm up the local LLM in the background so first request isn't slow
+                self._spotify.ensure_local_llm_warm()
+                # Start skip detector globally — catches media key / keybind skips too
+                self._spotify.skip_detector.start()
+                print("[skip_detector] Global skip monitoring active")
             except Exception as e:
                 print(f"[auth] pre-auth failed: {e}")
             self._start_player_poll()
