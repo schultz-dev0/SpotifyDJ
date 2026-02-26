@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Spotify AI DJ
+Comment=Tell it what to play. AI does the rest.
+Exec=python3 /home/schultz/projects/SpotifyDJ2.0/main.py
+Icon=~/.local/share/icons/spot.png
+Terminal=false
+Type=Application
+Categories=AudioVideo;Music;
+StartupWMClass=com.spotifyaidj.app
